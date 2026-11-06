@@ -7,3 +7,11 @@ bun.lockb
 
 # Miscellaneous
 /static/
+
+# Vendored AI-tool configuration and skill docs (generated; not VULNEX source)
+.cursor/
+.gemini/
+.github/agents/
+.github/skills/
+.opencode/
+.pi/
