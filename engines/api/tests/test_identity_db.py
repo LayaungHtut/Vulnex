@@ -7,7 +7,7 @@ from collections.abc import Callable
 import pytest
 from conftest import Org, needs_db
 from sqlalchemy import Connection, Engine, text
-from sqlalchemy.exc import DBAPIError, ProgrammingError
+from sqlalchemy.exc import DBAPIError, IntegrityError, ProgrammingError
 
 pytestmark = needs_db
 
@@ -141,6 +141,10 @@ def test_own_membership_visibility_does_not_allow_writes_elsewhere(
         "DELETE FROM app.audit_event",
         "DELETE FROM app.tenant",
         "TRUNCATE app.audit_event",
+        "DELETE FROM app.asset",
+        "TRUNCATE app.asset",
+        "TRUNCATE app.scope_group",
+        "TRUNCATE app.scope_entry",
     ],
 )
 def test_append_only_and_undeletable_tables(app_engine: Engine, stmt: str) -> None:
@@ -196,3 +200,29 @@ def test_create_session_requires_membership(
             text("SELECT * FROM auth.create_session(:u, :t, :d, interval '1 hour', NULL, '')"),
             {"u": a.owner_id, "t": b.id, "d": b"\x00" * 32},
         )
+
+
+def test_composite_keys_reject_references_into_another_tenant(
+    app_engine: Engine, make_org: Callable[..., Org]
+) -> None:
+    """A row in A's tenant cannot point at B's scope group, even with A's tenant_id (M3)."""
+    a, b = make_org("A"), make_org("B")
+    with app_engine.begin() as c:
+        as_tenant(c, b.id)
+        b_group = c.execute(
+            text("INSERT INTO app.scope_group (tenant_id, name) VALUES (:b, 'b') RETURNING id"),
+            {"b": b.id},
+        ).scalar_one()
+    for stmt in (
+        "INSERT INTO app.scope_entry (tenant_id, scope_group_id, kind, value) "
+        "VALUES (:a, :g, 'cidr', '10.0.0.0/8')",
+        "INSERT INTO app.asset (tenant_id, scope_group_id, kind, target) "
+        "VALUES (:a, :g, 'ip', '10.0.0.1')",
+    ):
+        with (
+            app_engine.connect() as c,
+            pytest.raises(IntegrityError, match="foreign key"),
+            c.begin(),
+        ):
+            as_tenant(c, a.id)
+            c.execute(text(stmt), {"a": a.id, "g": b_group})

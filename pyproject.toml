@@ -11,7 +11,7 @@ select = ["E", "F", "W", "I", "B", "UP", "S", "BLE", "SIM", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
 # Tests: asserts, fixed test passwords, and SQL built from catalog/parametrize constants.
-"**/tests/**" = ["S101", "S105", "S608"]
+"**/tests/**" = ["S101", "S104", "S105", "S608"]
 # Migrations build DDL only from constants defined in the same file; no input reaches them.
 "**/migrations/**" = ["S608"]
 

@@ -4,6 +4,17 @@ All notable changes to VULNEX. Format: [Keep a Changelog](https://keepachangelog
 
 ## [Unreleased]
 
+### Added — M3 authorized scope and asset inventory (not yet committed)
+
+- Migration `0003`: `app.scope_group`, `app.scope_entry`, `app.asset` under FORCE RLS, with composite `(tenant_id, id)` foreign keys; assets cannot be deleted by the application role (retire instead).
+- Strict target parsing (`vulnex.targets`, ADR-0006 §5 steps 1–5): canonical dotted-decimal IPv4 only (integer, hex, octal, short and zero-padded forms are rejected, never reinterpreted); CIDR host bits must be zero; IPv6 refused in v0; loopback, link-local (cloud metadata), "this network", multicast and reserved ranges are never accepted; URLs, ports and non-ASCII hostnames rejected with specific messages.
+- Scope groups with included and excluded ranges, hostnames and `*.` subdomain wildcards. Owner/administrator authorization records a signed-in attestation bound to a digest of the exact entries; any later change shows as "changed since authorization" until re-authorized; authorization can be withdrawn.
+- Assets (IPv4 address, range up to /20, hostname) registered inside a scope group and refused when outside it; scope eligibility recomputed on every read; edit name, criticality and notes; retire and reactivate (which re-checks scope); search, filter and pagination.
+- Permissions `scope.read`, `scope.manage`, `assets.read`, `assets.manage` (owner/admin manage; analyst reads both; viewer reads assets).
+- API: `GET|POST /api/v1/scope-groups`, `GET|PATCH|DELETE /api/v1/scope-groups/{group_id}`, `POST /api/v1/scope-groups/{group_id}/entries`, `DELETE /api/v1/scope-groups/{group_id}/entries/{entry_id}`, `POST|DELETE /api/v1/scope-groups/{group_id}/authorization`, `GET|POST /api/v1/assets`, `GET|PATCH /api/v1/assets/{asset_id}`, `POST /api/v1/assets/{asset_id}/retire`, `POST /api/v1/assets/{asset_id}/reactivate`; `GET /api/v1/audit-events` gains `target_type` / `target_id` filters (per-object history).
+- Console: Assets (list, filters, register), asset detail (eligibility, edit, retire/reactivate, history), Authorized scope (list, create), scope group detail (entries, authorization, edit, delete).
+- Tests: 69 parser and scope-membership cases, scope and asset API behaviour, role matrix, 15 new cross-tenant probes, composite-foreign-key rejection, append-only and undeletable privileges, console action helpers.
+
 ### Added — M2 identity and organizations (committed 2026-11-08)
 
 - Migration `0002`: `app.tenant`, `app.membership`, `app.audit_event` under FORCE RLS; global identity in schema `auth`, reachable only through `SECURITY DEFINER` functions; append-only audit; `app.current_user_id()`.

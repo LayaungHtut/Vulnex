@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException
 
-from vulnex import __version__, audit, auth, logs, members
+from vulnex import __version__, assets, audit, auth, logs, members, scope
 from vulnex.db import SCHEMA_REVISION, make_engine, schema_revision
 from vulnex.settings import Settings
 
@@ -56,7 +56,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.engine = engine
     app.state.settings = settings
-    for module in (auth, members, audit):
+    for module in (auth, members, audit, scope, assets):
         app.include_router(module.router)
 
     @app.middleware("http")

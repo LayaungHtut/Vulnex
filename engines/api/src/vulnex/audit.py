@@ -70,8 +70,13 @@ def list_events(
     principal: Annotated[Principal, Depends(require(Permission.AUDIT_READ))],
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     before_id: Annotated[int | None, Query(ge=1)] = None,
+    target_type: Annotated[str | None, Query(max_length=50)] = None,
+    target_id: Annotated[str | None, Query(max_length=100)] = None,
 ) -> AuditPage:
-    """Newest first. For the next page pass `before_id` = this page's `next_before_id`."""
+    """Newest first. For the next page pass `before_id` = this page's `next_before_id`.
+
+    `target_type` and `target_id` narrow the list to one object's history (such as one asset).
+    """
     with tenant_tx(engine_of(request), principal) as conn:
         emails = {
             r.user_id: r.email
@@ -84,9 +89,11 @@ def list_events(
                     "host(ip) AS ip, request_id, detail FROM app.audit_event "
                     "WHERE tenant_id = app.current_tenant() "
                     "AND (CAST(:before AS bigint) IS NULL OR id < CAST(:before AS bigint)) "
+                    "AND (CAST(:tt AS text) IS NULL OR target_type = CAST(:tt AS text)) "
+                    "AND (CAST(:tid AS text) IS NULL OR target_id = CAST(:tid AS text)) "
                     "ORDER BY id DESC LIMIT :limit"
                 ),
-                {"before": before_id, "limit": limit + 1},
+                {"before": before_id, "tt": target_type, "tid": target_id, "limit": limit + 1},
             )
             .mappings()
             .all()

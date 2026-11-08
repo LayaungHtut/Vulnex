@@ -9,6 +9,8 @@
 	// Only implemented sections appear; each is hidden when the role cannot use it.
 	const nav: { href: string; label: string; permission?: Permission }[] = [
 		{ href: resolve(''), label: 'Overview' },
+		{ href: resolve('assets'), label: 'Assets', permission: 'assets.read' },
+		{ href: resolve('scope'), label: 'Authorized scope', permission: 'scope.read' },
 		{ href: resolve('members'), label: 'Members', permission: 'members.read' },
 		{ href: resolve('audit'), label: 'Audit log', permission: 'audit.read' }
 	];
@@ -40,7 +42,7 @@
 				{/each}
 			</ul>
 			<p class="mt-6 px-3 text-xs leading-relaxed text-slate-400">
-				Assets, scans and findings arrive in later milestones (M3–M8).
+				Scans and findings arrive in later milestones (M4–M8).
 			</p>
 		</nav>
 	</aside>

@@ -8,6 +8,7 @@ A new route without a probe fails `test_every_route_is_in_the_matrix`.
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 from conftest import PASSWORD, Org, api_operations, bearer, login, needs_db, unique_email
@@ -94,6 +95,194 @@ def probe_audit(client: TestClient, p: Pair) -> None:
     assert str(p.a.owner_id) not in body and p.a.owner_email not in body
 
 
+# ---- M3: scope groups and assets. A's objects, attacked with B's (owner) token. ----
+
+
+@dataclass
+class AData:
+    group: str
+    entry: str
+    asset: str
+
+
+def a_data(client: TestClient, p: Pair) -> AData:
+    h = bearer(p.token_a)
+    g = client.post("/api/v1/scope-groups", headers=h, json={"name": "A scope"}).json()["id"]
+    r = client.post(f"/api/v1/scope-groups/{g}/entries", headers=h, json={"value": "10.9.0.0/16"})
+    entry = r.json()["entries"][0]["id"]
+    r = client.post("/api/v1/assets", headers=h, json={"scope_group_id": g, "target": "10.9.0.5"})
+    return AData(g, entry, r.json()["id"])
+
+
+def a_group(client: TestClient, p: Pair, d: AData) -> dict[str, Any]:
+    r = client.get(f"/api/v1/scope-groups/{d.group}", headers=bearer(p.token_a))
+    assert r.status_code == 200
+    group: dict[str, Any] = r.json()
+    return group
+
+
+def a_asset(client: TestClient, p: Pair, d: AData) -> dict[str, Any]:
+    r = client.get(f"/api/v1/assets/{d.asset}", headers=bearer(p.token_a))
+    assert r.status_code == 200
+    asset: dict[str, Any] = r.json()
+    return asset
+
+
+def probe_list_groups(client: TestClient, p: Pair) -> None:
+    d = a_data(client, p)
+    body = client.get("/api/v1/scope-groups", headers=bearer(p.token_b)).text
+    assert d.group not in body and "10.9.0.0" not in body
+
+
+def probe_create_group(client: TestClient, p: Pair) -> None:
+    d = a_data(client, p)
+    r = client.post("/api/v1/scope-groups", headers=bearer(p.token_b), json={"name": "A scope"})
+    assert r.status_code == 201  # the same name is fine: it lands in B, not A
+    assert r.json()["id"] != d.group
+    assert a_group(client, p, d)["name"] == "A scope"
+
+
+def probe_get_group(client: TestClient, p: Pair) -> None:
+    d = a_data(client, p)
+    r = client.get(f"/api/v1/scope-groups/{d.group}", headers=bearer(p.token_b))
+    assert r.status_code == 404
+
+
+def probe_update_group(client: TestClient, p: Pair) -> None:
+    d = a_data(client, p)
+    r = client.patch(
+        f"/api/v1/scope-groups/{d.group}", headers=bearer(p.token_b), json={"name": "pwned"}
+    )
+    assert r.status_code == 404
+    assert a_group(client, p, d)["name"] == "A scope"
+
+
+def probe_delete_group(client: TestClient, p: Pair) -> None:
+    d = a_data(client, p)
+    r = client.delete(f"/api/v1/scope-groups/{d.group}", headers=bearer(p.token_b))
+    assert r.status_code == 404
+    a_group(client, p, d)
+
+
+def probe_add_entry(client: TestClient, p: Pair) -> None:
+    d = a_data(client, p)
+    r = client.post(
+        f"/api/v1/scope-groups/{d.group}/entries",
+        headers=bearer(p.token_b),
+        json={"value": "198.51.100.0/24"},
+    )
+    assert r.status_code == 404
+    assert len(a_group(client, p, d)["entries"]) == 1
+
+
+def probe_remove_entry(client: TestClient, p: Pair) -> None:
+    d = a_data(client, p)
+    # Also through B's own group with A's entry ID: the entry must stay unreachable.
+    own = client.post("/api/v1/scope-groups", headers=bearer(p.token_b), json={"name": "b"})
+    for g in (d.group, own.json()["id"]):
+        r = client.delete(f"/api/v1/scope-groups/{g}/entries/{d.entry}", headers=bearer(p.token_b))
+        assert r.status_code == 404
+    assert len(a_group(client, p, d)["entries"]) == 1
+
+
+def probe_authorize(client: TestClient, p: Pair) -> None:
+    d = a_data(client, p)
+    r = client.post(
+        f"/api/v1/scope-groups/{d.group}/authorization",
+        headers=bearer(p.token_b),
+        json={"confirm": True},
+    )
+    assert r.status_code == 404
+    assert a_group(client, p, d)["authorization"]["status"] == "not_authorized"
+
+
+def probe_revoke(client: TestClient, p: Pair) -> None:
+    d = a_data(client, p)
+    client.post(
+        f"/api/v1/scope-groups/{d.group}/authorization",
+        headers=bearer(p.token_a),
+        json={"confirm": True},
+    )
+    r = client.delete(f"/api/v1/scope-groups/{d.group}/authorization", headers=bearer(p.token_b))
+    assert r.status_code == 404
+    assert a_group(client, p, d)["authorization"]["status"] == "authorized"
+
+
+def probe_list_assets(client: TestClient, p: Pair) -> None:
+    d = a_data(client, p)
+    for query in ("", "?status=all", f"?scope_group_id={d.group}", "?q=10.9"):
+        r = client.get(f"/api/v1/assets{query}", headers=bearer(p.token_b))
+        assert r.status_code == 200
+        assert r.json()["total"] == 0 and d.asset not in r.text
+
+
+def probe_create_asset(client: TestClient, p: Pair) -> None:
+    """IDOR: B names A's scope group in the request body."""
+    d = a_data(client, p)
+    r = client.post(
+        "/api/v1/assets",
+        headers=bearer(p.token_b),
+        json={"scope_group_id": d.group, "target": "10.9.0.6"},
+    )
+    assert r.status_code == 404
+    r = client.get("/api/v1/assets?status=all", headers=bearer(p.token_a))
+    assert r.json()["total"] == 1
+
+
+def probe_get_asset(client: TestClient, p: Pair) -> None:
+    d = a_data(client, p)
+    assert client.get(f"/api/v1/assets/{d.asset}", headers=bearer(p.token_b)).status_code == 404
+
+
+def probe_update_asset(client: TestClient, p: Pair) -> None:
+    d = a_data(client, p)
+    r = client.patch(f"/api/v1/assets/{d.asset}", headers=bearer(p.token_b), json={"name": "x"})
+    assert r.status_code == 404
+    assert a_asset(client, p, d)["name"] == ""
+
+
+def probe_retire_asset(client: TestClient, p: Pair) -> None:
+    d = a_data(client, p)
+    r = client.post(f"/api/v1/assets/{d.asset}/retire", headers=bearer(p.token_b))
+    assert r.status_code == 404
+    assert a_asset(client, p, d)["status"] == "active"
+
+
+def probe_reactivate_asset(client: TestClient, p: Pair) -> None:
+    d = a_data(client, p)
+    client.post(f"/api/v1/assets/{d.asset}/retire", headers=bearer(p.token_a))
+    r = client.post(f"/api/v1/assets/{d.asset}/reactivate", headers=bearer(p.token_b))
+    assert r.status_code == 404
+    assert a_asset(client, p, d)["status"] == "retired"
+
+
+def test_audit_target_filter_stays_in_tenant(client: TestClient, pair: Pair) -> None:
+    d = a_data(client, pair)
+    url = f"/api/v1/audit-events?target_type=asset&target_id={d.asset}"
+    assert len(client.get(url, headers=bearer(pair.token_a)).json()["items"]) == 1
+    r = client.get(url, headers=bearer(pair.token_b))
+    assert r.status_code == 200 and r.json()["items"] == []
+
+
+M3_PROBES: dict[tuple[str, str], Callable[[TestClient, Pair], None]] = {
+    ("GET", "/api/v1/scope-groups"): probe_list_groups,
+    ("POST", "/api/v1/scope-groups"): probe_create_group,
+    ("GET", "/api/v1/scope-groups/{group_id}"): probe_get_group,
+    ("PATCH", "/api/v1/scope-groups/{group_id}"): probe_update_group,
+    ("DELETE", "/api/v1/scope-groups/{group_id}"): probe_delete_group,
+    ("POST", "/api/v1/scope-groups/{group_id}/entries"): probe_add_entry,
+    ("DELETE", "/api/v1/scope-groups/{group_id}/entries/{entry_id}"): probe_remove_entry,
+    ("POST", "/api/v1/scope-groups/{group_id}/authorization"): probe_authorize,
+    ("DELETE", "/api/v1/scope-groups/{group_id}/authorization"): probe_revoke,
+    ("GET", "/api/v1/assets"): probe_list_assets,
+    ("POST", "/api/v1/assets"): probe_create_asset,
+    ("GET", "/api/v1/assets/{asset_id}"): probe_get_asset,
+    ("PATCH", "/api/v1/assets/{asset_id}"): probe_update_asset,
+    ("POST", "/api/v1/assets/{asset_id}/retire"): probe_retire_asset,
+    ("POST", "/api/v1/assets/{asset_id}/reactivate"): probe_reactivate_asset,
+}
+
+
 PROBES: dict[tuple[str, str], Callable[[TestClient, Pair], None]] = {
     ("GET", "/api/v1/auth/session"): probe_session,
     ("POST", "/api/v1/auth/logout"): probe_logout,
@@ -103,6 +292,7 @@ PROBES: dict[tuple[str, str], Callable[[TestClient, Pair], None]] = {
     ("PATCH", "/api/v1/members/{user_id}"): probe_update_member,
     ("DELETE", "/api/v1/members/{user_id}"): probe_remove_member,
     ("GET", "/api/v1/audit-events"): probe_audit,
+    **M3_PROBES,
 }
 
 
