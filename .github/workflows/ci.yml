@@ -1,0 +1,82 @@
+# VULNEX basic CI (founder decision D8). Status: PROPOSED; never run on GitHub yet.
+# shortcut: actions pinned by major tag, not commit SHA; pin to SHAs once the repo exists (Dependabot can maintain them).
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  console:
+    name: Console lint, types, unit tests, audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run check
+      # Browser-mode component tests and Playwright e2e need browsers; added when real UI exists.
+      - run: npx vitest run --project server
+      # Fails only on high/critical; current findings are 4 low + 12 moderate in dev tooling.
+      - run: npm audit --audit-level=high
+
+  api:
+    name: API lint, types, tests (PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: vulnex
+          POSTGRES_PASSWORD: ci-throwaway-superuser
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      # Throwaway credentials for an ephemeral CI container; not secrets.
+      PGPASSWORD: ci-throwaway-superuser
+      VULNEX_TEST_OWNER_URL: postgresql+psycopg://vulnex_owner:ci-throwaway-owner@127.0.0.1:5432/vulnex_test
+      VULNEX_TEST_APP_URL: postgresql+psycopg://vulnex_app:ci-throwaway-app@127.0.0.1:5432/vulnex_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: 0.13.3
+      - run: >-
+          psql -h 127.0.0.1 -U postgres -d vulnex -v ON_ERROR_STOP=1
+          -v owner_password=ci-throwaway-owner -v app_password=ci-throwaway-app
+          -f deploy/compose/postgres/roles.psql
+      - run: uv sync --locked
+      - run: uv run ruff check
+      - run: uv run ruff format --check
+      - run: uv run mypy engines/api
+      # Database tests skip only when VULNEX_TEST_*_URL is unset; here they are set, so they run.
+      - run: uv run pytest
+
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Free for personal accounts; an organization-owned repo needs a GITLEAKS_LICENSE secret.
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

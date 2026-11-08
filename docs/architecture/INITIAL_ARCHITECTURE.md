@@ -1,6 +1,10 @@
 # VULNEX Initial Architecture (v0 proposal)
 
-Status: **PROPOSED**. No part of this document is approved.
+Status: **PROPOSED**, revision v0.2. Founder rulings of 2026-11-06:
+
+- **APPROVED:** D2 (self-hosted → hybrid → SaaS) and D3 (remote non-intrusive M1).
+- **CONDITIONALLY APPROVED:** D5/D6, covering the modular FastAPI app, PostgreSQL, outbound-only workers and the PostgreSQL queue. Final approval waits on the conditions (a)–(g), which are mapped in [§18](#18-founder-d6-conditions-where-each-is-addressed), and on Astra 6's review.
+
 Author: Claude · Date: 2026-11-06 · Reviewers: Astra 6 (independent review), GPT-6 (audit, when available) · Decision authority: Founder
 
 Inputs: [PRD v0.1 + Amendment A](../product/PRD.md), [research](../research/), Master Project Instructions §9–16, [threat model](../security/THREAT_MODEL.md).
@@ -9,17 +13,17 @@ Labels used below: **PROPOSED** = my recommendation, awaiting review. **UNVERIFI
 
 ## 1. Summary of proposals
 
-| #   | Proposal                                                                                                                                                                  | Why                                                                                                                                                                        | Needs                                |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
-| P1  | **Modular monolith** control plane (FastAPI) that also contains the intelligence and risk modules; **separately deployed scanner worker**                                 | Founder directive §10; one founder cannot run a service fleet                                                                                                              | [ADR-0001](../decisions/ADR-0001.md) |
-| P2  | **Workers pull jobs** over outbound HTTPS with mTLS; the job queue is a **PostgreSQL table** (`FOR UPDATE SKIP LOCKED`); **no message broker** in v0                      | Hybrid mode forbids inbound ports to customer networks; leases and idempotency are easier to reason about in one transactional store                                       | ADR-0003                             |
-| P3  | **PostgreSQL Row-Level Security** plus application authorization; tenant-composite foreign keys                                                                           | PRD SEC-02 requires RLS; composite keys stop cross-tenant references at the schema level                                                                                   | ADR-0005                             |
-| P4  | Humans authenticate with **OIDC** (external or bundled IdP); server-side sessions; services use hashed scoped tokens; workers use mTLS certificates                       | PRD SEC-03/API-04; MFA is delegated to the IdP and verified via claims                                                                                                     | ADR-0004                             |
-| P5  | **Own TCP-connect discovery** in the worker for v0; **Nmap integration deferred until its license is reviewed**                                                           | My understanding (UNVERIFIED, R1) is that the Nmap Public Source License restricts commercial products that ship Nmap or that are built specifically to drive and parse it | ADR-0008                             |
-| P6  | First-party detection plugins only, as signed bundles, each running in a resource-limited subprocess with network access only through the worker's scope-enforcing client | PRD excludes customer plugins; real sandboxing for third-party code is a later research item                                                                               | ADR-0007                             |
-| P7  | Evidence stored in PostgreSQL (redacted, size-capped) in v0; object storage deferred                                                                                      | Bounded, redacted evidence is small; removes a service from the laptop and self-hosted footprint                                                                           | ADR-0011                             |
-| P8  | Move the SvelteKit app to `apps/console`; Python code under `engines/`                                                                                                    | Founder's layout §18, minus empty directories                                                                                                                              | ADR-0002                             |
-| P9  | Release **self-hosted first**, then hybrid, then SaaS; design multi-tenant from the first migration                                                                       | PRD Amendment A5                                                                                                                                                           | Founder decision D2                  |
+| #   | Proposal                                                                                                                                                                                                                  | Why                                                                                                                                                                        | Needs                                |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| P1  | **Modular monolith** control plane (FastAPI) that also contains the intelligence and risk modules; **separately deployed scanner worker**                                                                                 | Founder directive §10; one founder cannot run a service fleet                                                                                                              | [ADR-0001](../decisions/ADR-0001.md) |
+| P2  | **Workers pull jobs** over outbound HTTPS with mTLS; the job queue is a **PostgreSQL table** (`FOR UPDATE SKIP LOCKED`); **no message broker** in v0                                                                      | Hybrid mode forbids inbound ports to customer networks; leases and idempotency are easier to reason about in one transactional store                                       | §7.1; ADR-0003                       |
+| P3  | **PostgreSQL Row-Level Security** plus application authorization; tenant-composite foreign keys                                                                                                                           | PRD SEC-02 requires RLS; composite keys stop cross-tenant references at the schema level                                                                                   | ADR-0005                             |
+| P4  | Humans authenticate with **OIDC** (external or bundled IdP); server-side sessions; services use hashed scoped tokens; workers use mTLS certificates                                                                       | PRD SEC-03/API-04; MFA is delegated to the IdP and verified via claims                                                                                                     | ADR-0004                             |
+| P5  | **Own TCP-connect discovery** in the worker for v0; **Nmap integration deferred until its license is reviewed**                                                                                                           | My understanding (UNVERIFIED, R1) is that the Nmap Public Source License restricts commercial products that ship Nmap or that are built specifically to drive and parse it | ADR-0008                             |
+| P6  | First-party detection plugins only, as signed bundles. **Probe/evaluate split:** the worker runs declared probes, and plugin code only evaluates the recorded responses, in a resource-limited subprocess with no network | PRD excludes customer plugins; plugin code never touches the network; fixtures become replayable transcripts                                                               | §5.4; ADR-0007                       |
+| P7  | Evidence stored in PostgreSQL (redacted, size-capped) in v0; object storage deferred                                                                                                                                      | Bounded, redacted evidence is small; removes a service from the laptop and self-hosted footprint                                                                           | ADR-0011                             |
+| P8  | Move the SvelteKit app to `apps/console`; Python code under `engines/`                                                                                                                                                    | Founder's layout §18, minus empty directories                                                                                                                              | ADR-0002                             |
+| P9  | Release **self-hosted first**, then hybrid, then SaaS; design multi-tenant from the first migration                                                                                                                       | PRD Amendment A5                                                                                                                                                           | **APPROVED** (D2)                    |
 
 ## 2. Constraints this design respects
 
@@ -80,19 +84,31 @@ Labels used below: **PROPOSED** = my recommendation, awaiting review. **UNVERIFI
 
 ## 5. Scanner architecture
 
-### 5.1 Enrollment and identity
+### 5.1 Enrollment, identity and revocation
 
-- The admin creates a single-use enrollment token, stored as a hash, valid for 24 hours or less and bound to a tenant and scope group.
-- The worker generates an Ed25519 or P-256 key pair locally and sends a CSR with the token over server-authenticated TLS. The API issues a client certificate from a **VULNEX worker CA** that is specific to the deployment. Proposed lifetime: 7 days, renewed at 50% of its life.
-- The worker API is a separate listener that requires a client certificate. The certificate fingerprint maps to a worker record. Revocation is immediate through that record, so no CRL or OCSP infrastructure is needed in v0. Short certificate lifetimes limit the damage if the worker database row is lost.
-- Undecided (ADR-0006): whether the uvicorn listener terminates TLS itself or a reverse proxy (Caddy) verifies client certificates and forwards a trusted header. A proxy-forwarded header is safe only if the API listener is unreachable except through the proxy.
+Full design: [ADR-0006 §1–3](../decisions/ADR-0006.md). In short:
+
+- A single-use, hashed enrollment token valid for 24 hours or less, bound to a tenant and scope group, plus a pinned control-plane CA.
+- The worker generates its own P-256 key, which never leaves the host, and receives a 7-day client certificate renewed at 50% of its life.
+- Caddy verifies the client certificate on a worker-only listener on the internal network.
+- Revocation is immediate through the worker record and cancels all of the worker's leases.
 
 ### 5.2 Scope enforcement on the worker (independent of the control plane)
 
-- Each lease carries a scope lease: tenant, allowed CIDRs and hostnames, exclusions, validity window, job ID, all signed by the control plane's scope-signing key. The worker refuses unsigned or expired leases.
-- All plugin network I/O goes through one guarded connector. It resolves DNS itself, checks every resolved address against the scope lease and exclusions, and refuses loopback, link-local and metadata addresses (for example `169.254.169.254`), the control-plane address, and multicast/broadcast. A scope lease can permit a private range explicitly. Redirects and re-resolution are checked again.
-- Rate, concurrency, per-task time and total-target caps are enforced in the worker, not only at dispatch (FR-07).
-- When the lease expires or the job is cancelled, the worker stops new probes within 10 s and abandons in-flight probes within 30 s (PRD §20).
+Full design: [ADR-0006 §4–6](../decisions/ADR-0006.md). In short:
+
+- Every task carries an Ed25519-signed scope lease. The worker verifies the signature over the exact bytes it received, before parsing them.
+- An optional **customer-controlled local scope ceiling** on the worker narrows any lease. It is recommended as mandatory for hybrid.
+- One connector module handles all network I/O:
+  - strict IPv4/CIDR/hostname parsing;
+  - normalization of IPv4-embedding IPv6 forms;
+  - a never-allowed list (loopback, link-local and metadata, multicast, the control plane, the worker itself);
+  - private ranges only when explicitly in scope;
+  - DNS answers validated and **pinned**;
+  - no automatic redirects;
+  - caps from the lease.
+- v0 does not assess IPv6. AAAA answers are reported as coverage gaps.
+- Cancellation reaches the worker within about 5 s through the lease-extend response, and a disconnected worker's lease expires within 30 s (§7.1).
 
 ### 5.3 Discovery and fingerprinting (v0)
 
@@ -107,7 +123,21 @@ Each plugin ships a manifest with the fields the Master Instructions §12 requir
 
 - **Types:** `discovery`, `fingerprint`, `check`. A check returns exactly one of the five confidence-class outcomes with evidence that validates against its schema. Outcomes that fail validation are recorded as `UNKNOWN` with an error.
 - **Safety:** v0 permits only `safe` checks: read-only, no authentication attempts, no payloads that change state. The worker refuses to load anything else.
-- **Execution:** one subprocess per plugin run with a wall-clock timeout, CPU, memory and file-descriptor limits (rlimits on Linux), no inherited secrets, and I/O only through the guarded connector over a pipe. Python cannot sandbox Python in-process, so this isolation is defense in depth for **first-party** code only. Third-party plugins require a real sandbox (gVisor, nsjail or WASM; R6) and a separate ADR.
+- **Execution (v0.2, addresses founder condition g): probe/evaluate split.**
+  - A check declares a **probe plan as data**: a list of steps using worker primitives. The v0 primitives are `tcp_connect`, `tcp_exchange` (bounded send and read), `tls_handshake` (certificate, protocol version, cipher), `http_get`/`http_head` (no body upload, no redirects unless declared, see ADR-0006 §5.7) and `ssh_banner`.
+  - The **worker** executes the plan through the connector. **Plugin code never opens a socket.**
+  - The recorded responses (the **transcript**) then go to the plugin's `evaluate(transcript) -> Outcome` function.
+  - `evaluate` runs in a fresh subprocess per check run, started in Python isolated mode, with:
+    - an empty environment and a temporary empty working directory;
+    - the transcript passed on stdin, and output capped at 1 MiB on stdout;
+    - rlimits: `RLIMIT_CPU` 5 s, `RLIMIT_AS` 256 MiB, `RLIMIT_NOFILE` 16, `RLIMIT_FSIZE` 0 (no file writes);
+    - a wall-clock timeout of 10 s, enforced by killing the whole process group.
+  - The output must validate against the plugin's evidence schema, and the outcome must be one of the five classes. Otherwise the result is recorded as `UNKNOWN`, with the error.
+  - On Linux hosts that allow unprivileged user and network namespaces, the evaluator also runs with **no network interface**. The worker reports this capability in its heartbeat. Whether Docker's default seccomp profile permits this is UNVERIFIED (R6).
+- **What it buys:** safety class is enforced by the primitives rather than by trusting plugin code. Fixtures become recorded transcripts that replay deterministically in CI. Evidence is the transcript itself, redacted.
+- **What it costs:** a check that needs a protocol the primitives do not cover needs a new, reviewed primitive in worker code. That is intentional.
+- **Limits of the isolation:** it is still defense in depth for **first-party** code, because rlimits and the namespace are not a hardened sandbox. Third-party plugins require a real sandbox (gVisor, nsjail or WASM; R6) and a separate ADR. Windows hosts lack rlimits, so the v0 worker runs on Linux only, including inside Docker Desktop.
+- Discovery (TCP connect) and fingerprinting are worker built-ins, not plugins, in v0.
 - **Distribution:** plugins ship as a versioned bundle with a manifest of SHA-256 digests, signed with Ed25519. The worker verifies the signature and digests before loading anything and fails closed. Key custody and rotation are in ADR-0007; TUF is evaluated in R7.
 - **Fixtures:** every released check has positive, negative and ambiguous fixtures plus a timeout fixture (PRD AC-04). They run as recorded protocol transcripts in CI and against lab containers before release.
 
@@ -121,21 +151,111 @@ Each plugin ships a manifest with the fields the Master Instructions §12 requir
 ## 7. Database architecture
 
 - PostgreSQL 17 (version pinned in ADR), accessed through SQLAlchemy 2.x Core/ORM with psycopg 3. Schema changes go through Alembic.
-- **Roles:** `vulnex_owner` owns the schema and runs migrations. `vulnex_app` is used at runtime, has no ownership, no `BYPASSRLS`, and only INSERT/SELECT on audit tables. A `vulnex_readonly` role exists for operators.
-- **Tenant isolation:**
-  - Every tenant table has `tenant_id NOT NULL` and a composite unique key `(tenant_id, id)`. Child tables reference `(tenant_id, parent_id)`, so a row cannot point at another tenant's row.
-  - RLS policies check `tenant_id = current_setting('app.tenant_id')::uuid`.
-  - The API sets the tenant with `SET LOCAL` inside each transaction, so a pooled connection cannot carry tenant context to the next request.
-  - Global intelligence tables carry no tenant data and no RLS.
+- **Roles and tenant isolation:** full design in [ADR-0005](../decisions/ADR-0005.md). The roles are `vulnex_owner` (migrations), `vulnex_app` (runtime, no `BYPASSRLS`), `vulnex_ingest` (intelligence only) and `vulnex_queue` (queue functions). The isolation mechanisms are:
+  - composite `(tenant_id, id)` foreign keys;
+  - `ENABLE` + `FORCE ROW LEVEL SECURITY` with fail-closed `app.current_tenant()`;
+  - tenant context set per transaction with `set_config('app.tenant_id', :id, true)`;
+  - CI gates for RLS coverage, cross-tenant access and pool leakage.
+
+  Global intelligence lives in schema `intel` with no tenant data and no RLS.
+
 - **Append-only data:** observations, evidence, score snapshots, state transitions and audit events are never updated in place. Corrections are new rows.
 - **Core entities (first cut):** `tenant`, `user`, `membership`, `session`, `service_token`, `audit_event`, `asset`, `asset_identifier`, `scope`, `scope_group`, `worker`, `enrollment_token`, `scan_profile`, `scan_run`, `scan_task`, `observation`, `evidence`, `finding`, `finding_transition`, `exception`, `risk_snapshot`; global: `intel_source`, `intel_raw_record`, `vulnerability`, `vulnerability_alias`, `affected_product`, `severity_metric`, `kev_entry`, `epss_score`, `intel_ingest_run`.
-- **Queue:** `job` table (`queue`, `tenant_id`, `payload`, `state`, `lease_owner`, `lease_expires_at`, `attempt`, `idempotency_key`). Expired leases are reclaimed by a sweeper, and results from stale attempts are rejected. Revisit a broker only if measured contention or latency fails PRD §20 targets.
+- **Queue:** see §7.1.
+
+### 7.1 Job queue semantics (addresses founder conditions a and b)
+
+**Guarantee:** at-least-once delivery, with idempotent result handling. Duplicates may be _delivered_, but their _effects_ are applied once. "Exactly once" is not claimed.
+
+**Table** `queue.job`. Owned by `vulnex_queue`, so it is reachable only through `SECURITY DEFINER` functions (ADR-0005 §4).
+
+| Column                                                                                            | Purpose                                                                          |
+| ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `id`, `tenant_id` (NULL only for global jobs such as ingestion), `queue`, `kind`, `payload jsonb` | What to do, for whom                                                             |
+| `scope_group_id`                                                                                  | Which workers may claim it (worker queues only)                                  |
+| `state`                                                                                           | `queued` → `leased` → `succeeded` / `failed` / `cancelled` / `dead`              |
+| `priority`, `run_after`                                                                           | Ordering and backoff                                                             |
+| `attempt`, `max_attempts`                                                                         | Retry accounting                                                                 |
+| `lease_id`, `lease_owner`, `lease_expires_at`                                                     | Current lease. A new random `lease_id` is issued on every claim                  |
+| `cancel_requested_at`                                                                             | Cooperative cancellation                                                         |
+| `idempotency_key`                                                                                 | `UNIQUE (queue, idempotency_key)`, so a re-submitted scan does not enqueue twice |
+| `last_error`, `created_at`, `updated_at`                                                          | Diagnostics                                                                      |
+
+Partial index on `(queue, priority DESC, run_after) WHERE state = 'queued'`.
+
+**Claim.** There are two separate functions, so that a caller cannot widen a worker's claim by passing a missing or NULL filter.
+
+- `queue.claim_for_worker(worker_id, n, ttl)` looks up the worker's `tenant_id`, `scope_group_id` and `status` **inside the function**. It returns nothing unless the status is `active`/`stale`, and it only ever touches worker queues.
+- `queue.claim_for_runner(queue, owner, n, ttl)` serves runner queues only (schedules, ingestion, exports, retention), may return jobs of any tenant, and can never return worker-queue jobs.
+
+Core of `claim_for_worker`, a single transaction:
+
+```sql
+WITH w AS (
+  SELECT tenant_id, scope_group_id FROM app.worker
+  WHERE id = $worker_id AND status IN ('active', 'stale')),
+next AS (
+  SELECT j.id FROM queue.job j, w
+  WHERE j.queue = 'scan' AND j.state = 'queued' AND j.run_after <= now()
+    AND j.tenant_id = w.tenant_id AND j.scope_group_id = w.scope_group_id
+  ORDER BY j.priority DESC, j.run_after, j.id
+  LIMIT $n
+  FOR UPDATE OF j SKIP LOCKED)
+UPDATE queue.job j
+   SET state = 'leased', attempt = j.attempt + 1, lease_id = gen_random_uuid(),
+       lease_owner = $worker_id::text, lease_expires_at = now() + $ttl, updated_at = now()
+  FROM next WHERE j.id = next.id
+RETURNING j.id, j.tenant_id, j.kind, j.payload, j.attempt, j.lease_id, j.lease_expires_at;
+```
+
+- `SKIP LOCKED` lets concurrent claimers each take distinct rows without blocking. The row lock and the state change commit together, so two claimers can never both hold a lease on the same job.
+- All times come from the database clock (`now()`), never from worker clocks.
+- The `worker_id` comes only from the authenticated certificate (ADR-0006 §2), never from the request body.
+- **Long-poll:** if nothing is available, the API holds the worker's request up to 25 s, re-trying the claim every 1 s, then returns empty. This is proposed. Contention and latency must be measured against PRD §20 (dispatch p95 ≤30 s).
+
+**Lease extension and cancellation:**
+
+- `queue.extend(job_id, lease_id, ttl)` succeeds only if the `lease_id` is still current and the state is `leased`. The worker calls it every 5 s with TTL 30 s.
+- The response includes `cancel_requested`. If a cancel was requested, the worker stops new probes at once, submits any partial results, and calls `complete(..., outcome = cancelled)`.
+- `queue.request_cancel` moves a `queued` job directly to `cancelled`. A `leased` job gets `cancel_requested_at` set and stays leased until the worker acknowledges or the lease expires. An expired lease with a cancel request becomes `cancelled`, not re-queued.
+
+**Results and completion:**
+
+- Every result submission carries `(job_id, lease_id, attempt, seq)`. It is accepted only if the `lease_id` is current. The pair `(job_id, attempt, seq)` is unique, so a duplicate submission returns the original response and has no new effect. A submission with a stale `lease_id` gets 409, and its payload is quarantined for audit, never applied.
+- `queue.complete(job_id, lease_id, outcome)` runs in the **same transaction** as the final results insert. A job can therefore never be marked `succeeded` without its results, or the reverse.
+
+**Retries:**
+
+- On failure, or lease expiry without a cancel request: if `attempt < max_attempts`, the job returns to `queued` with `run_after = now() + backoff`. Backoff is exponential with jitter: base 30 s, doubling, capped at 15 min.
+- When attempts run out, the job becomes `dead`. It stays visible in the UI and API and raises an alert.
+- Scan tasks default to `max_attempts = 3`. Observations are keyed by attempt. Partial observations from failed attempts are kept as evidence, but only a successful attempt counts toward coverage and verification (PRD §13).
+
+**Recovery:**
+
+- `queue.sweep()` runs in the background runner every 10 s. It moves `leased` jobs whose `lease_expires_at < now()` to their retry, cancelled or dead state, using `SKIP LOCKED`, so it is safe to run from multiple runners at once.
+- No queue state lives in process memory. A control-plane restart loses nothing.
+- A worker restart loses in-flight work. Its leases expire and the jobs retry.
+- A scan run's state is derived from its tasks: `completed` when all are `succeeded`, `partially_completed` if any are `failed`/`dead`, `cancelled` when cancel was requested (PRD §12).
+
+**Fairness:** `queue.claim` can cap concurrently leased jobs per tenant. v0 self-hosted is effectively single-tenant, so the cap is designed now but tuned with SaaS (D2).
+
+**Tests:**
+
+- Two concurrent claimers never receive the same job.
+- A killed worker's job is retried after lease expiry.
+- A duplicate result submission has no effect.
+- A late result after re-lease gets 409 and is quarantined.
+- Cancellation of a queued job, and of a leased job with the worker acknowledging and with the worker gone.
+- Retry count and backoff, and the transition to `dead`.
+- Complete-without-results is impossible.
+- Sweeper concurrency.
+- A load test: claim latency with 10,000 queued jobs and 4 claimers, on the founder's laptop.
 
 ## 8. Multi-tenancy and authorization
 
 - A request has exactly one tenant context, chosen explicitly. Users with several memberships switch context. There is no cross-tenant aggregation in v0 (PRD §3).
 - Authorization is enforced in API dependencies with deny-by-default role → permission maps (PRD §10), and RLS backs it up. Background jobs carry `tenant_id` and set it the same way.
-- Required tests: for every tenant-bearing endpoint and job type, a second tenant's credentials must get 404 or an empty result, and must be unable to write. A test enumerates routes so that a new endpoint without a tenant test fails CI.
+- Required tests: for every tenant-bearing endpoint and job type, a second tenant's credentials must get 404 or an empty result, and must be unable to write. A test enumerates routes so that a new endpoint without a tenant test fails CI. The full test list is in [ADR-0005 §6](../decisions/ADR-0005.md).
 
 ## 9. Intelligence ingestion
 
@@ -210,20 +330,34 @@ This differs from the founder's §18 sketch in one way: `intelligence` and `risk
 
 ## 16. ADRs required before dependent implementation
 
-| ADR                              | Decision                                                        | Blocks phase |
-| -------------------------------- | --------------------------------------------------------------- | ------------ |
-| [0001](../decisions/ADR-0001.md) | Modular monolith + separate workers                             | 2            |
-| 0002                             | Repository layout and toolchain                                 | 2            |
-| 0003                             | Job transport (PostgreSQL pull queue)                           | 4            |
-| 0004                             | Identity: OIDC flow, sessions, IdP, MFA verification            | 3            |
-| 0005                             | Tenancy enforcement (RLS + composite keys)                      | 3            |
-| 0006                             | Worker trust: enrollment, mTLS termination, scope lease signing | 4            |
-| 0007                             | Plugin contract, isolation and signing                          | 6            |
-| 0008                             | Discovery engine (custom vs Nmap vs other), after R1            | 5            |
-| 0009                             | Intelligence sources and redistribution, after R3               | 7            |
-| 0010                             | Risk model v0                                                   | 9            |
-| 0011                             | Evidence storage and retention                                  | 5            |
+| ADR                                                  | Decision                                             | Blocks phase |
+| ---------------------------------------------------- | ---------------------------------------------------- | ------------ |
+| [0001](../decisions/ADR-0001.md)                     | Modular monolith + separate workers                  | 2            |
+| [0002](../decisions/ADR-0002.md) (drafted, PROPOSED) | Repository layout and toolchain                      | 2            |
+| 0003                                                 | Job transport (PostgreSQL pull queue)                | 4            |
+| 0004                                                 | Identity: OIDC flow, sessions, IdP, MFA verification | 3            |
+| [0005](../decisions/ADR-0005.md) (drafted, PROPOSED) | Tenancy enforcement (RLS + composite keys)           | 3            |
+| [0006](../decisions/ADR-0006.md) (drafted, PROPOSED) | Worker trust, signed scope, destination validation   | 4            |
+| 0007                                                 | Plugin contract, isolation and signing               | 6            |
+| 0008                                                 | Discovery engine (custom vs Nmap vs other), after R1 | 5            |
+| 0009                                                 | Intelligence sources and redistribution, after R3    | 7            |
+| 0010                                                 | Risk model v0                                        | 9            |
+| 0011                                                 | Evidence storage and retention                       | 5            |
 
 ## 17. What this proposal deliberately leaves out
 
 Microservices, a message broker, Redis, Kubernetes/Helm, object storage, OpenTelemetry tracing, Grafana, a Rust scanner, a plugin SDK for third parties, AI and billing. Each needs a measured reason first. None of them is excluded permanently.
+
+## 18. Founder D6 conditions: where each is addressed
+
+| #   | Condition (founder, 2026-11-06)                                  | Addressed in                                                                                                                                                            | Status                             |
+| --- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| a   | Transactional job claiming and locking                           | §7.1 (claim functions, `FOR UPDATE SKIP LOCKED`, worker scope derived inside the function); ADR-0005 §4                                                                 | PROPOSED                           |
+| b   | Job leases, retries, idempotency, cancellation and recovery      | §7.1 (lease IDs, 5 s extend / 30 s TTL, `(job_id, attempt, seq)` idempotency, exponential backoff and `dead`, cooperative cancel, sweeper); ADR-0006 §6 timing          | PROPOSED                           |
+| c   | Database-enforced tenant isolation                               | ADR-0005 §1–2 (composite foreign keys, `FORCE` RLS, non-owner runtime role, separate schemas)                                                                           | PROPOSED                           |
+| d   | RLS context handling and cross-tenant testing                    | ADR-0005 §3 (`set_config(..., true)`, fail-closed `current_tenant()`, definer functions for pre-tenant lookups) and §6 (eight CI test gates)                            | PROPOSED                           |
+| e   | Scanner authentication, revocation and signed scope verification | ADR-0006 §1–4 (pinned enrollment, host-generated key, 7-day certificate, immediate revocation, Ed25519 scope lease over exact bytes, customer-controlled local ceiling) | PROPOSED                           |
+| f   | DNS resolution, IPv4/IPv6, redirects and address validation      | ADR-0006 §5 (strict parsing, IPv4-embedding IPv6 normalization, never-allowed list, DNS pinning, no automatic redirects, capped hops)                                   | PROPOSED                           |
+| g   | Secure plugin execution and resource limits                      | §5.4 (probe/evaluate split; evaluator subprocess with rlimits, timeout, no network where supported); formal ADR-0007 still to be written                                | PROPOSED; ADR-0007 not yet drafted |
+
+Still not drafted, and needing founder permission: ADR-0003 (queue, which would formalize §7.1) and ADR-0007 (plugin contract and signing, which would formalize §5.4). No new infrastructure was introduced to meet these conditions. Caddy and PostgreSQL were already in the v0.1 proposal.

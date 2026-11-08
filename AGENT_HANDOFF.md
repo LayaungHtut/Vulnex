@@ -1,49 +1,103 @@
-# Agent Handoff
+# Agent Handoff: Astra 6 architecture review package
 
-**Current task:** Master Instructions §28, first assignment: repository inspection, product discovery, architecture proposal, research plan, roadmap, documentation foundation.
-**From:** Claude · **To:** Astra 6 (independent review); GPT-6 when available · **Date:** 2026-11-06 · **Branch:** `develop`, uncommitted
+**Task:** Independent challenge of the VULNEX v0 architecture before the founder's final approval of D5/D6.
+**From:** Claude · **To:** Astra 6; GPT-6 when available · **Date:** 2026-11-06
+**Repository state:** `develop` at `d7df12e` (Phase 0 docs, committed under founder decision D9). The ADRs and CI listed below are **uncommitted** and awaiting founder approval to commit.
 
-## Relevant documents (read in this order)
+## 1. Founder rulings you are reviewing against (2026-11-06)
 
-1. [docs/product/PRD.md](docs/product/PRD.md): v0.1 (pre-existing) + **Amendment A** (new, end of file)
-2. [docs/architecture/INITIAL_ARCHITECTURE.md](docs/architecture/INITIAL_ARCHITECTURE.md)
-3. [docs/security/THREAT_MODEL.md](docs/security/THREAT_MODEL.md)
-4. [docs/decisions/ADR-0001.md](docs/decisions/ADR-0001.md)
-5. [docs/research/RESEARCH_PLAN.md](docs/research/RESEARCH_PLAN.md), [docs/product/ROADMAP.md](docs/product/ROADMAP.md), [DEFINITION_OF_DONE.md](DEFINITION_OF_DONE.md), [PROJECT_STATE.md](PROJECT_STATE.md)
+- **APPROVED.** D2: self-hosted → hybrid → SaaS, designed for all three. D3: M1 is remote non-intrusive discovery and service assessment; M2 may add authenticated read-only Linux package inventory; **never `CONFIRMED` from a remotely observed version alone when backports or other uncertainty may exist.**
+- **CONDITIONALLY APPROVED.** D5/D6 (modular FastAPI app, PostgreSQL, outbound-only workers, PostgreSQL-backed queue). The architecture must address (a)–(g):
+  - (a) transactional job claiming and locking;
+  - (b) leases, retries, idempotency, cancellation, recovery;
+  - (c) database-enforced tenant isolation;
+  - (d) RLS context handling and cross-tenant testing;
+  - (e) scanner authentication, revocation, signed scope verification;
+  - (f) DNS resolution, IPv4/IPv6, redirects, address validation;
+  - (g) secure plugin execution and resource limits.
+- **Constraint.** No additional infrastructure without a demonstrated requirement. Founder hardware: a 16 GB laptop, no budget assumed.
+- **Authorship.** PRD v0.1 and the TASK 002 research: initial author Claude Opus 5.5, as recorded by the founder. They have **not** been independently verified, and verifying them is part of your scope.
 
-## Files changed
+## 2. Documents to review (in this order)
 
-| File                                                                                                                                                                    | Change                                                                                                                                          |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PRODUCT_REQUIREMENTS.md` → `docs/product/PRD.md`                                                                                                                       | Moved. Added a status note after the header and Amendment A at the end. v0.1 body unchanged apart from Prettier whitespace                      |
-| `COMPETITIVE_ANALYSIS.md`, `COMPETITOR_FEATURE_MATRIX.md`, `MARKET_OPPORTUNITIES.md`, `RESEARCH_SOURCES.md` → `docs/research/`                                          | Moved together so relative links still resolve. Added an authorship line (founder decision); otherwise unchanged apart from Prettier whitespace |
-| `docs/architecture/INITIAL_ARCHITECTURE.md`, `docs/security/THREAT_MODEL.md`, `docs/decisions/ADR-0001.md`, `docs/research/RESEARCH_PLAN.md`, `docs/product/ROADMAP.md` | New                                                                                                                                             |
-| `PROJECT_STATE.md`, `AGENT_HANDOFF.md`, `DEFINITION_OF_DONE.md`                                                                                                         | New                                                                                                                                             |
-| `README.md`, `docs/WORKFLOW.md`                                                                                                                                         | Updated: roles per Master Instructions §3 ("Argon" is now Astra 6), document index                                                              |
+| #   | File                                               | What to focus on                                                                     |
+| --- | -------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| 1   | `docs/architecture/INITIAL_ARCHITECTURE.md` (v0.2) | §5.4 plugin probe/evaluate split (g); §7.1 queue semantics (a, b); §18 condition map |
+| 2   | `docs/decisions/ADR-0005.md`                       | Tenant isolation (c, d)                                                              |
+| 3   | `docs/decisions/ADR-0006.md`                       | Worker trust and destination validation (e, f)                                       |
+| 4   | `docs/decisions/ADR-0001.md`                       | Monolith + separate workers. The founder will inspect this one personally            |
+| 5   | `docs/decisions/ADR-0002.md`                       | Repository layout and toolchain                                                      |
+| 6   | `docs/security/THREAT_MODEL.md` (v0.2)             | Missing threats; whether the rankings are right; the accepted risks in §5            |
+| 7   | `docs/product/PRD.md` (v0.1 + Amendment A)         | Amendment A1 confidence classes vs the D3 ruling                                     |
+| 8   | `docs/research/*`                                  | Spot-check citations in the TASK 002 research (independent verification pending)     |
 
-No code, dependency, configuration, database or API changes.
+Supporting files: `PROJECT_STATE.md`, `docs/research/RESEARCH_PLAN.md`, `docs/product/ROADMAP.md`, `DEFINITION_OF_DONE.md`, `docs/operations/GITHUB_SETUP.md`, `.github/workflows/ci.yml`.
 
-## Decisions made
+## 3. Questions I want challenged (per condition)
 
-None. All items are PROPOSED. Founder decisions D1–D9 are listed in PROJECT_STATE.md.
+| Cond. | Question                                                                                                                                                                                                                                                                                                                       |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| a     | Is `FOR UPDATE OF j SKIP LOCKED` inside a `SECURITY DEFINER` function, with the worker's scope derived inside the function, sufficient to prevent double-leasing and scope widening? Any isolation-level pitfalls?                                                                                                             |
+| b     | Are 5 s extend / 30 s TTL / 1 s long-poll re-claim realistic for a PostgreSQL queue on a laptop and on small servers? Is the "complete in the same transaction as the final results" rule enough to prevent completed-without-results states? Is quarantining late results (rather than discarding them) worth the complexity? |
+| c     | Is the composite foreign key plus `FORCE` RLS combination sound? Are there bypass paths: views, `SECURITY DEFINER` functions, `COPY`, triggers, extensions?                                                                                                                                                                    |
+| d     | Verify the claim that a custom setting can read back as `''` after a transaction-local `SET`, which is why `NULLIF` is used. Is `set_config(…, true)` with pooled connections (psycopg 3 / SQLAlchemy) leak-free, including when the connection is returned mid-error? Are the eight CI gates enough?                          |
+| e     | Does the Ed25519 scope lease add real security beyond mTLS? I state its limits plainly in ADR-0006 §4. Is the customer-local ceiling the right answer for a compromised control plane? Is the Caddy-forwarded-fingerprint design safe, or should uvicorn terminate mTLS directly?                                              |
+| f     | Find a bypass: address notations, IPv6 transition forms, DNS rebinding, CNAME chains, redirects, IDNA homographs, `Host`/SNI mismatches. Is refusing **all** IPv6 connections in v0 acceptable given the D3 scope? Should hostname "external, any public address" authorization exist at all in v0?                            |
+| g     | Is the probe/evaluate split workable for real checks (TLS configuration, SSH banner and package revision, HTTP header and version)? Are the rlimit values sensible? Does Docker's default seccomp profile allow unprivileged user and network namespaces for the evaluator?                                                    |
+| —     | Earlier open points: TM-3-3 (compromised worker forges its own tenant's results), the PRD §15 risk defaults for unknown inputs, and the M1 effort estimate of 6–9 months part-time                                                                                                                                             |
 
-## Tests executed
+## 4. What is verified, what is not
 
-`npm run check` passes; the template server unit test passes; `npm run lint` fails on pre-existing Prettier issues (details in PROJECT_STATE.md). Nothing VULNEX-specific exists to test.
+| Category                                                      | Items                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | How established                                                                                                                        |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **Verified by Claude this session**                           | Repository contents and history; tool versions (Python 3.13.15, Node 24.19.0, npm 12.0.2, Docker 29.7.2; Nmap, gh and gitleaks not installed); `npm run lint` exit 0, `npm run check` 0 errors, 1/1 template unit test, `npm audit` 16 (4 low, 12 moderate, 0 high/critical); all relative doc links resolve                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Commands run on the founder's machine, 2026-11-06                                                                                      |
+| **Sourced but not independently verified**                    | All vendor capability, licensing and pricing statements in TASK 002 (`docs/research/`), with citations in `RESEARCH_SOURCES.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Desk research by Claude Opus 5.5 (earlier session). Claude did not re-open the sources in this session. **Needs Astra 6 verification** |
+| **Unverified claims (Claude's knowledge, no source checked)** | 1. Nmap NPSL restricts commercial embedding and "drive and parse" tools (R1). 2. Greenbone Community Feed restricts commercial use (R2). 3. Data-source terms: NVD key and notice, KEV public, EPSS attribution, OSV mixed licenses (R3). 4. Some Debian/Ubuntu OpenSSH banners reveal the package revision (R4). 5. NVD CPE enrichment backlog since 2024. 6. MinIO community distribution changed in 2025 (R12). 7. Keycloak memory ≈0.5–1 GB; stack ≈1.5 GB without IdP. 8. uvicorn does not expose the peer certificate to ASGI apps. 9. Caddy client-certificate placeholders and header stripping. 10. Custom setting reads `''` after a local `SET` ends. 11. Docker default seccomp blocks unprivileged namespaces. 12. GitHub plan facts: branch protection on private repos, secret scanning, Actions minutes, gitleaks organization license | Each is marked UNVERIFIED or _check_ where it appears                                                                                  |
+| **Assumptions and hypotheses**                                | PRD customer assumptions A1–A6; beachhead; performance budgets (PRD §20); risk-model v0 weights and defaults; lease timings; effort estimates; resource estimates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Stated as proposals; no measurement exists                                                                                             |
+| **Recommendations**                                           | Everything marked PROPOSED: ADR-0001/0002/0005/0006, architecture v0.2, threat model v0.2, research plan, roadmap, Definition of Done, CI workflow                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Claude's judgment; awaiting review                                                                                                     |
 
-## Known issues / weaknesses I want challenged
+## 5. Files changed since `d7df12e` (uncommitted)
 
-1. **P2, PostgreSQL pull queue with no broker.** Is long-poll leasing adequate at PRD §20 targets (dispatch p95 ≤30 s, cancellation ≤10 s)? Cancellation is delivered on the next poll or heartbeat, so the poll interval bounds it.
-2. **P5, Nmap deferral.** My NPSL reading is from memory and is UNVERIFIED. If it is wrong, custom discovery is wasted effort. If it is right, the fingerprinting quality gap is real.
-3. **TM-5-2, plugin isolation.** A subprocess plus rlimits does not stop a Python plugin from opening raw sockets. Is "first-party only plus code review plus container egress limits" acceptable for v0?
-4. **TM-3-3.** A compromised worker can forge results within its own tenant's scope. Is traceability enough for v0?
-5. **PRD A1, confidence classes.** Are the `PROBABLE` criteria (banner package revision mapping to an unfixed advisory state) sound, or should banner evidence never exceed `POTENTIAL`?
-6. **Roadmap effort (6–9 months for M1).** The estimate is uncalibrated. Challenge it.
-7. **Risk model v0 (PRD §15).** The unknown-input defaults (X=15, B=10) push items with unknown context upward. Is that the right failure direction?
+| File                                                       | Change                                                                                                                                                                                                                    |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `docs/decisions/ADR-0002.md`, `ADR-0005.md`, `ADR-0006.md` | New, PROPOSED                                                                                                                                                                                                             |
+| `docs/architecture/INITIAL_ARCHITECTURE.md`                | v0.2: founder rulings in the header; §1 table; §5.1–5.2 condensed to point at ADR-0006; §5.4 probe/evaluate split; §7 points at ADR-0005; new §7.1 queue semantics; §8 test pointer; §16 ADR links; new §18 condition map |
+| `docs/security/THREAT_MODEL.md`                            | v0.2: TM-4-5 (address-notation bypass), TM-4-6 (compromised control plane), TM-5-2 re-ranked from M to L                                                                                                                  |
+| `docs/operations/GITHUB_SETUP.md`                          | New: private repository and CI instructions                                                                                                                                                                               |
+| `.github/workflows/ci.yml`                                 | New: lint, types, unit tests, `npm audit` (high), gitleaks. Never run on GitHub                                                                                                                                           |
+| `PROJECT_STATE.md`, `AGENT_HANDOFF.md`                     | Updated                                                                                                                                                                                                                   |
 
-## Reviewer instructions
+No code, dependency, database or API changes. `package-lock.json` is unchanged (an incidental npm prune was reverted).
 
-- Review against the Master Instructions and PRD v0.1. Flag any place where I silently changed approved scope (I believe there is none; all changes are in Amendment A and marked).
-- Verify or refute every claim marked **UNVERIFIED** (Nmap NPSL, MinIO distribution, NVD backlog, IdP memory use, OpenSSH banner revisions) against primary sources.
-- Use the verdicts APPROVED / APPROVED WITH CONDITIONS / NEEDS REVISION / REJECTED / NOT VERIFIED, per document.
-- Write the review to `docs/reviews/2026-11-06-foundation-review.md`.
+## 6. Tests executed (this round)
+
+| Command                           | Result                                                                                                                                                                                                                                               |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run lint`                    | PASS                                                                                                                                                                                                                                                 |
+| `npm run check`                   | PASS (0 errors, 0 warnings)                                                                                                                                                                                                                          |
+| `npx vitest run --project server` | PASS (1/1, template test)                                                                                                                                                                                                                            |
+| `npm audit --audit-level=high`    | PASS (exit 0)                                                                                                                                                                                                                                        |
+| `npm ci`                          | **FAIL locally**: `EPERM` unlinking `lightningcss.win32-x64-msvc.node`, a file held open by a running editor process on Windows. Recovered with `npm install`, then the lockfile change was reverted. Expected to pass on Linux CI; **NOT VERIFIED** |
+| gitleaks, GitHub Actions run      | NOT RUN (tools and remote absent)                                                                                                                                                                                                                    |
+
+## 7. Expected output from Astra 6
+
+- Write to `docs/reviews/2026-11-06-architecture-review.md`.
+- One verdict per document (APPROVED / APPROVED WITH CONDITIONS / NEEDS REVISION / REJECTED / NOT VERIFIED) and one per condition (a)–(g).
+- For each finding: severity (critical / high / medium / low), the exact section, a concrete failure scenario, and a suggested fix.
+- For each UNVERIFIED claim in §4: confirmed / refuted / unresolved, with a primary source and retrieval date.
+- Flag anything where Claude silently changed approved scope. I believe there is none.
+
+## 8. Addendum 2026-11-07: M1 foundation code (also for review)
+
+**Branch:** `feature/m1-foundation`, uncommitted. The code paths listed below now exist. §5 above ("no code changes") describes the earlier round only. Full status and test results: [PROJECT_STATE.md](PROJECT_STATE.md).
+
+Please also challenge the following:
+
+| Area                  | Files                                                                                    | Question                                                                                                                                         |
+| --------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Role setup            | `deploy/compose/postgres/roles.psql`                                                     | Are `vulnex_owner` as database owner and `vulnex_app` with NOINHERIT and CONNECT only the right baseline for ADR-0005? Is anything over-granted? |
+| Tenant context        | `engines/api/migrations/versions/0001_baseline.py`, `engines/api/tests/test_database.py` | The fail-closed behaviour after `set_config(..., true)` ends was tested on PG 17. Is it guaranteed by the documentation or only observed?        |
+| Error and log hygiene | `engines/api/src/vulnex/main.py`, `logs.py`                                              | Can any path leak a DSN, an exception text or an unvalidated header into a response or log?                                                      |
+| Readiness             | `main.py` `/readyz`                                                                      | Is unauthenticated version disclosure acceptable for self-hosted v0?                                                                             |
+| CI                    | `.github/workflows/ci.yml` job `api`                                                     | Can the database tests silently skip in CI? (Intended: no. The URLs are always set.)                                                             |

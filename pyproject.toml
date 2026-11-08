@@ -1,0 +1,22 @@
+# uv workspace root (ADR-0002, PROPOSED). Python members live under engines/ and packages/.
+[tool.uv.workspace]
+members = ["engines/api"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "BLE", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101"]
+
+[tool.mypy]
+strict = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+testpaths = ["engines/api/tests"]
+addopts = "-ra --strict-markers"
+markers = ["db: needs PostgreSQL (VULNEX_TEST_OWNER_URL and VULNEX_TEST_APP_URL)"]

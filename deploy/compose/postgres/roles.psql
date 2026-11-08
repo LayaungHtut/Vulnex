@@ -1,0 +1,15 @@
+-- VULNEX database roles (ADR-0005). Run once per cluster as a superuser:
+--   psql -v ON_ERROR_STOP=1 -v owner_password=... -v app_password=... -d vulnex -f roles.psql
+-- Creates databases `vulnex` (if missing) and `vulnex_test`, both owned by vulnex_owner.
+
+CREATE ROLE vulnex_owner LOGIN PASSWORD :'owner_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+CREATE ROLE vulnex_app LOGIN PASSWORD :'app_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT;
+
+SELECT 'CREATE DATABASE vulnex' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'vulnex')\gexec
+CREATE DATABASE vulnex_test;
+
+-- Owning the database gives vulnex_owner the public schema (pg_database_owner) for alembic_version.
+ALTER DATABASE vulnex OWNER TO vulnex_owner;
+ALTER DATABASE vulnex_test OWNER TO vulnex_owner;
+REVOKE ALL ON DATABASE vulnex, vulnex_test FROM PUBLIC;
+GRANT CONNECT ON DATABASE vulnex, vulnex_test TO vulnex_app;

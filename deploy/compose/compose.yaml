@@ -1,0 +1,47 @@
+# Local development stack (M1). Usage, from the repository root:
+#   cp deploy/compose/.env.example deploy/compose/.env   # then set real passwords
+#   docker compose -f deploy/compose/compose.yaml up -d --build
+# Ports bind to 127.0.0.1 only. The console runs on the host with `npm run dev`.
+name: vulnex
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: vulnex
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/compose/.env}
+      VULNEX_OWNER_PASSWORD: ${VULNEX_OWNER_PASSWORD:?set VULNEX_OWNER_PASSWORD}
+      VULNEX_APP_PASSWORD: ${VULNEX_APP_PASSWORD:?set VULNEX_APP_PASSWORD}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./postgres/00-roles.sh:/docker-entrypoint-initdb.d/00-roles.sh:ro
+      - ./postgres/roles.psql:/vulnex/roles.psql:ro
+    ports:
+      - 127.0.0.1:${VULNEX_DB_PORT:-5432}:5432
+    healthcheck:
+      # TCP, not the socket: the init-time server listens on the socket only.
+      test: [CMD, pg_isready, -h, 127.0.0.1, -U, postgres, -d, vulnex]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    build: { context: ../.., dockerfile: engines/api/Dockerfile }
+    command: [alembic, upgrade, head]
+    environment:
+      VULNEX_MIGRATION_DATABASE_URL: postgresql+psycopg://vulnex_owner:${VULNEX_OWNER_PASSWORD}@db:5432/vulnex
+    depends_on:
+      db: { condition: service_healthy }
+
+  api:
+    build: { context: ../.., dockerfile: engines/api/Dockerfile }
+    environment:
+      VULNEX_DATABASE_URL: postgresql+psycopg://vulnex_app:${VULNEX_APP_PASSWORD}@db:5432/vulnex
+    ports:
+      - 127.0.0.1:8000:8000
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+volumes:
+  db-data:

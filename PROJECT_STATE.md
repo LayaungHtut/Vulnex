@@ -1,10 +1,44 @@
 # VULNEX Project State
 
-Last updated: 2026-11-06 by Claude · Branch: `develop` · **Last verified commit: `ea7c9d8`** (scaffold + workflow docs)
+Last updated: 2026-11-07 by Claude · Branch: `feature/m1-foundation` · **Last verified commit: `d7df12e`** (Phase 0 docs, founder D9). Nothing since then is committed. Uncommitted, awaiting founder approval to commit: the M1 foundation code (below), ADR-0002/0005/0006, architecture v0.2, threat model v0.2, GitHub setup and CI workflow, CLAUDE.md, docs/mandate/, DEVELOPMENT.md, this file and AGENT_HANDOFF.md
 
 ## Current phase
 
-**Phase 0 (Product & Technical Discovery) is complete. The founder has ruled on D2, D3, D5/D6 (conditionally), D8 and D9.** Phase 1 (architecture and security foundation) has started as documentation only: proposed ADRs and the Astra 6 review package. Founder directive: **no major implementation yet.**
+**M1 (application foundation) is IMPLEMENTED and locally TESTED. It is not committed.** Phase 0 is complete. Phase 1 architecture documents remain PROPOSED and await review. The founder's Master Build Execution Prompt (2026-11-06) directs implementation, starting with M1.
+
+## Current milestone: M1 application foundation: **IMPLEMENTED, TESTED locally (2026-11-07); not committed; CI NOT RUN**
+
+**Branch:** `feature/m1-foundation` (from `develop` @ `d7df12e`). **Earlier correction:** `d7df12e` was first committed to `main` by mistake. `develop` was fast-forwarded to it and `main` was moved back to `ea7c9d8`. Nothing has been pushed (there is no remote).
+
+### What M1 delivers (all verified on 2026-11-07 against the running stack)
+
+| Piece                                                                                                                                                                                                                                                                  | Where                                                      | Status                                                                                        |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| uv workspace, Python 3.13, ruff, mypy `--strict`, pytest                                                                                                                                                                                                               | `pyproject.toml`, `.python-version`, `uv.lock`             | IMPLEMENTED, TESTED                                                                           |
+| FastAPI app factory: JSON logs with request IDs (a caller's ID is echoed only if it matches `[A-Za-z0-9._-]{1,64}`), RFC 9457 problem responses (no internal detail on 500/503), `/healthz` (liveness), `/readyz` (DB check as `vulnex_app`), OpenAPI under `/api/v1/` | `engines/api/src/vulnex/`                                  | IMPLEMENTED, TESTED                                                                           |
+| Alembic baseline `0001`: schema `app`, fail-closed `app.current_tenant()`, grants to `vulnex_app` only                                                                                                                                                                 | `engines/api/migrations/`                                  | IMPLEMENTED, TESTED (upgrade → downgrade → upgrade)                                           |
+| DB roles `vulnex_owner` and `vulnex_app` (no superuser, no BYPASSRLS, NOINHERIT); databases `vulnex` and `vulnex_test`                                                                                                                                                 | `deploy/compose/postgres/roles.psql`                       | IMPLEMENTED, TESTED                                                                           |
+| Docker Compose: postgres:17-alpine, migrate, API (non-root), ports bound to 127.0.0.1                                                                                                                                                                                  | `deploy/compose/compose.yaml`, `engines/api/Dockerfile`    | IMPLEMENTED, TESTED (clean start from an empty volume)                                        |
+| Console status page using the real API, server-side, with three states (Operational / Degraded / Unreachable)                                                                                                                                                          | `src/routes/+page.server.ts`, `+page.svelte`, `src/env.ts` | IMPLEMENTED, TESTED (unit tests plus manual check against the live stack in all three states) |
+| CI job for the Python side with a PostgreSQL service                                                                                                                                                                                                                   | `.github/workflows/ci.yml`                                 | PROPOSED, **NOT RUN** (no remote)                                                             |
+| [DEVELOPMENT.md](DEVELOPMENT.md)                                                                                                                                                                                                                                       | root                                                       | IMPLEMENTED                                                                                   |
+
+**Database and API changes:** migration `0001` (schema `app`, function `app.current_tenant()`, default privileges). Endpoints: `GET /healthz` and `GET /readyz`. No tenant tables yet; they arrive with M2.
+
+**Security controls in M1:** least-privilege app role, verified by tests (cannot create objects, cannot `SET ROLE` to the owner, no BYPASSRLS). The API process never holds the owner credentials. Tenant context is transaction-local and fails closed, verified empirically on PG 17 (the ADR-0005 detail that was UNVERIFIED). Malformed tenant IDs raise errors instead of matching rows. Error responses carry no stack traces or DSNs. Request-ID header injection is rejected. Secrets live only in git-ignored `deploy/compose/.env`.
+
+### Deferred (deliberately) and remaining limitations
+
+- **Console move to `apps/console` (ADR-0002) is not done.** Python already sits where ADR-0002 puts it, so nothing has to be redone. The move is a mechanical `git mv` plus a root npm workspace. Do it with the editor closed; on 2026-11-06 the move failed on a Windows file lock.
+- No console container in Compose; the console runs on the host with `npm run dev`. `adapter-node` packaging belongs to Phase 12.
+- `/readyz` returns the API version without authentication. Revisit in M2.
+- `/readyz` checks connectivity, not whether migrations are at head.
+- Starlette warns that `httpx` with its TestClient is deprecated in favour of `httpx2`. This is a warning only and is not yet acted on.
+- Playwright e2e (updated for the status page) NOT RUN: the browser download was skipped because C: is full.
+
+### Environment blocker (founder action)
+
+**C: keeps filling up.** It had 9.9 GB free at the start of the session and had 0 to 0.4 GB free at the end. The cause found: `C:\pagefile.sys` grew to **17.2 GB** (system-managed) while memory commit was high. Free RAM was about 1.3 GB, the Docker VM is allowed 8 GB, and actual page-file use was only 1.6 GB. The Docker disk image is 6.2 GB. Claude has changed no system settings. Founder options, from least to most invasive: (1) reboot, which usually shrinks the page file; (2) lower Docker Desktop's memory to 4 GB (Settings → Resources), which is enough for this stack; (3) move the page file or Docker's disk image to D:. Claude Code's temp directory is also on C:.
 
 ## Completed
 
@@ -19,7 +53,15 @@ Last updated: 2026-11-06 by Claude · Branch: `develop` · **Last verified commi
 
 ## In progress
 
-Proposed ADR-0002 / 0005 / 0006 and the Astra 6 review package (D5/D6 conditions).
+| Item                                                                                                                                                         | Status                         |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------ |
+| [ADR-0002](docs/decisions/ADR-0002.md) layout, [ADR-0005](docs/decisions/ADR-0005.md) tenant isolation, [ADR-0006](docs/decisions/ADR-0006.md) scanner trust | PROPOSED, drafted, uncommitted |
+| [Architecture v0.2](docs/architecture/INITIAL_ARCHITECTURE.md): queue semantics §7.1, plugin probe/evaluate split §5.4, condition map §18                    | PROPOSED, uncommitted          |
+| [Threat model v0.2](docs/security/THREAT_MODEL.md)                                                                                                           | PROPOSED, uncommitted          |
+| [GitHub setup](docs/operations/GITHUB_SETUP.md) and [CI workflow](.github/workflows/ci.yml)                                                                  | PROPOSED; never run on GitHub  |
+| Astra 6 review package ([AGENT_HANDOFF.md](AGENT_HANDOFF.md))                                                                                                | Ready to send                  |
+
+ADR-0003 (queue) and ADR-0007 (plugins) are **not drafted**. Their designs are in architecture §7.1 and §5.4, and drafting them needs founder permission.
 
 ## Approved architecture and scope
 
@@ -58,7 +100,7 @@ Standing founder constraint: **no additional infrastructure without a demonstrat
 
 ## Known bugs
 
-None in product code (there is none).
+None open. Fixed during M1 verification: (1) the Compose healthcheck passed on PostgreSQL's init-time socket-only server, so migrations raced it; it now checks over TCP. (2) The console's 3 s API timeout was shorter than the API's own DB timeout (about 4 s measured), so a database outage showed as "API unreachable"; it is now 8 s.
 
 ## Technical debt / issues found (verified 2026-11-06)
 
@@ -66,22 +108,32 @@ None in product code (there is none).
 | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | -------------------------------- |
 | `npm audit`: 16 vulnerabilities (4 low, 12 moderate), all in dev tooling (eslint, typescript-eslint, @sveltejs/kit chain, tailwind typography) | `npm audit`        | Low (dev-only); no high/critical |
 | `adapter-auto` must become `adapter-node` for self-hosted packaging                                                                            | `vite.config.ts`   | Phase 2                          |
-| Template example code (`src/lib/vitest-examples`, welcome page) still present                                                                  | repo               | Remove in Phase 2                |
+| Template example code (`src/lib/vitest-examples`) still present; welcome page replaced by the status page                                      | repo               | Remove                           |
 | Nmap not installed on the dev machine; Python 3.13.15, Node 24.19.0, Docker 29.7.2 installed                                                   | `--version` checks | Info                             |
 
 ## Security issues
 
 None in code. The design-level accepted risks needing founder acknowledgment are in [THREAT_MODEL.md §5](docs/security/THREAT_MODEL.md).
 
-## Actual test results (2026-11-06)
+## Actual test results (2026-11-07, Windows dev machine, `feature/m1-foundation`, uncommitted tree)
 
-| Command                            | Result                                        |
-| ---------------------------------- | --------------------------------------------- |
-| `npm run lint`                     | PASS (exit 0)                                 |
-| `npm run check`                    | 0 errors, 0 warnings                          |
-| `npx vitest run --project server`  | 1 test file, 1 test passed (template example) |
-| Browser unit tests, Playwright e2e | NOT RUN                                       |
+| Command                                                                 | Result                                                                                                      |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `uv run pytest` with `VULNEX_TEST_*_URL` set (PostgreSQL 17 in Compose) | **14 passed**, 0 skipped. 6 API tests and 8 database/role/tenant-context tests                              |
+| `uv run pytest` without DB URLs                                         | 6 passed, 8 skipped (as designed)                                                                           |
+| `uv run ruff check`, `uv run ruff format --check`                       | PASS                                                                                                        |
+| `uv run mypy engines/api` (strict)                                      | PASS, 0 issues in 8 files                                                                                   |
+| `npm run check`                                                         | 0 errors, 0 warnings                                                                                        |
+| `npx vitest run --project server`                                       | 2 files, 4 tests passed (3 new status-page load tests plus the template test)                               |
+| `npm run lint`                                                          | PASS (exit 0)                                                                                               |
+| Compose from empty volume (`down -v`, `up --build`)                     | PASS: roles created, migration `0001` applied, `/readyz` → 200 `{"status":"ready","version":"0.1.0"}`       |
+| Console against live stack                                              | PASS for all three states: ready (v0.1.0) / db stopped → "Database unavailable" / api stopped → unreachable |
+| Playwright e2e, browser component tests                                 | NOT RUN                                                                                                     |
+| GitHub Actions (console, api, gitleaks jobs)                            | NOT RUN (no remote)                                                                                         |
+| `npm audit --audit-level=high`                                          | NOT RE-RUN this session (last: PASS on 2026-11-06)                                                          |
 
 ## Next recommended task
 
-Astra 6 review of the architecture package. Meanwhile the founder inspects ADR-0001 and creates the private GitHub repository (instructions to follow in `docs/operations/GITHUB_SETUP.md`).
+1. **Founder:** free space on C: (see the environment blocker above), then approve or decline committing the M1 foundation plus the Phase 1 documents on `feature/m1-foundation`.
+2. Claude: move the console to `apps/console` (ADR-0002), then start **M2, identity and organizations**: tenant, user, membership tables with RLS, Argon2id password hashing, server-side sessions, CSRF, and the route-matrix cross-tenant tests from ADR-0005 §6. M2 needs a founder answer on R8 (authentication provider: built-in vs Keycloak). Claude's recommendation for self-hosted v0: built-in sessions, with OIDC added later.
+3. Astra 6 review of the architecture package remains open.
