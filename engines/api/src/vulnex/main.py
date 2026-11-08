@@ -10,10 +10,11 @@ from typing import Any
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException
 
-from vulnex import __version__, assets, audit, auth, logs, members, scope
+from vulnex import __version__, assets, audit, auth, logs, members, scans, scope, workers
 from vulnex.db import SCHEMA_REVISION, make_engine, schema_revision
 from vulnex.settings import Settings
 
@@ -56,8 +57,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.engine = engine
     app.state.settings = settings
-    for module in (auth, members, audit, scope, assets):
+    for module in (auth, members, audit, scope, assets, workers, scans):
         app.include_router(module.router)
+    install_common(app, engine)
+    return app
+
+
+def install_common(app: FastAPI, engine: Engine) -> None:
+    """Request IDs and logging, problem-details errors, health checks (shared with worker API)."""
 
     @app.middleware("http")
     async def request_context(
@@ -123,5 +130,3 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             return problem(503, "Database schema is not at the expected revision")
         return {"status": "ready", "version": __version__}
-
-    return app

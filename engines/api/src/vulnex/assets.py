@@ -19,7 +19,14 @@ from vulnex.authz import Permission, Principal
 from vulnex.db import tenant_tx
 from vulnex.deps import client_ip, engine_of, require
 from vulnex.scope import entries_by_group, group_row, is_authorized
-from vulnex.targets import ASSET_MIN_PREFIX, Kind, Target, TargetError, parse, scope_problem
+from vulnex_worker_protocol.targets import (
+    ASSET_MIN_PREFIX,
+    Kind,
+    Target,
+    TargetError,
+    parse,
+    scope_problem,
+)
 
 router = APIRouter(prefix="/api/v1/assets", tags=["assets"])
 

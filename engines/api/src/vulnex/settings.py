@@ -1,4 +1,5 @@
 from ipaddress import IPv4Network, IPv6Network, ip_network
+from pathlib import Path
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -28,6 +29,14 @@ class Settings(BaseSettings):
     # Comma-separated CIDRs whose X-Forwarded-For is believed (the console, a reverse proxy).
     # Empty: the direct peer address is the client address.
     trusted_proxies: str = ""
+
+    # Scanner enrollment (ADR-0006 §1). The URL workers connect to (the mTLS gateway) and the CA
+    # that issued its TLS certificate, which goes into each enrollment bundle for pinning.
+    # Both unset: enrollment is refused with 503.
+    worker_endpoint_url: str = ""
+    worker_endpoint_ca_file: Path | None = None
+    # Worker API only (vulnex.worker_api): directory holding worker-ca.* and scope-signing.key.
+    worker_pki_dir: Path | None = None
 
     @property
     def trusted_proxy_networks(self) -> list[IPv4Network | IPv6Network]:

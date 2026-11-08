@@ -1,28 +1,49 @@
 # VULNEX Project State
 
-Last updated: 2026-11-08 by Claude · Branch: `feature/m4-scanner` (from `8d6912a`) · **Last commit: `8d6912a` M3 authorized scope and asset inventory** (founder: "continue", taken as approval to commit M3). M4 increment 1 is implemented and tested but **not committed**. Nothing is pushed (there is no remote).
+Last updated: 2026-11-08 by Claude · Branch: `feature/m4-scanner` (from `8d6912a`) · **M4 increments 2–3 are committed locally in the commit that contains this file** (after `9d56e7f`, increment 1; see `git log`). Nothing is pushed (there is no remote).
 
 ## Current phase
 
-**M4 (scanner foundation) is in progress.** Increment 1 (PostgreSQL job queue, ADR-0003) is IMPLEMENTED and locally TESTED, not committed. M3 (`8d6912a`), M2 (`07a51dc`) and M1 (`66a3fdb`) are committed. Phase 1 architecture documents remain PROPOSED and await founder and Astra 6 review.
+**M4 (scanner foundation) is IMPLEMENTED and TESTED locally, and committed locally.** Increment 1 (job queue) is committed (`9d56e7f`). Increments 2 and 3 (worker identity, signed scope, scanner, console) are implemented under founder option (b) for ADR-0006 (founder, 2026-11-08: "just do whatever to make my project perfect just like Nessus", taken as approval of my recommendation (b): build the worker trust design now, Astra 6 reviews it before any scan touches a real network). ADR-0003 and ADR-0006 remain **PROPOSED**. M3 (`8d6912a`), M2 (`07a51dc`) and M1 (`66a3fdb`) are committed.
 
-## Current milestone: M4 scanner foundation: **IN PROGRESS**
+## Current milestone: M4 scanner foundation: **IMPLEMENTED, TESTED locally; committed locally; CI NOT RUN**
 
-M4 is split into three increments so each can be reviewed on its own:
+| Increment                       | Content                                                                                                                                                                                              | Status                                                                   |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| 1. Job queue                    | ADR-0003; migration `0004`: `app.worker`, schema `queue` and 7 definer functions                                                                                                                     | IMPLEMENTED, TESTED, committed `9d56e7f`                                 |
+| 2. Worker identity              | Enrollment tokens, worker CA and 7-day client certificates, Caddy mTLS gateway, separate worker API, heartbeats, renewal, revocation (ADR-0006 §1–3)                                                 | **IMPLEMENTED, TESTED locally and over real mTLS in Compose; committed** |
+| 3. Scope leases, scanner, scans | Ed25519-signed scope leases re-checked at lease time; `engines/scanner` (verifies leases, enforces scope and a local ceiling; task `scope.check` only, **no network probing**); scan API and console | **IMPLEMENTED, TESTED locally and end to end in Compose; committed**     |
 
-| Increment                          | Content                                                                                                                                                                                              | Status                                                                                        |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| 1. Job queue                       | ADR-0003 (drafted, PROPOSED); migration `0004`: `app.worker`, schema `queue` (jobs, results, quarantine) and 7 `SECURITY DEFINER` functions: enqueue, claim, extend, submit, complete, cancel, sweep | **IMPLEMENTED, TESTED locally; NOT committed**                                                |
-| 2. Worker identity                 | Enrollment tokens, worker CA and client certificates, mTLS termination, revocation, heartbeats (ADR-0006 §1–3, §6)                                                                                   | **NOT IMPLEMENTED: waiting for a founder decision on ADR-0006** (see "Next recommended task") |
-| 3. Scope leases and worker process | Ed25519-signed scope leases from the M3 authorization; worker process that verifies leases and enforces scope with `vulnex.targets`; scan submission API and UI; no network probing (that is M5)     | NOT IMPLEMENTED                                                                               |
+### What increments 2–3 deliver (verified 2026-11-08)
 
-### What increment 1 delivers (verified 2026-11-08)
+| Piece                                                                                                                                                                                                                               | Where                                                    | Status                                                                                          |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Shared protocol package: target parser (moved from the API), signed leases (sign/verify), wire models                                                                                                                               | `packages/worker-protocol/`                              | IMPLEMENTED, TESTED (15 lease tests, 69 parser cases)                                           |
+| Worker PKI: worker CA, endpoint CA and TLS certificate, Ed25519 scope-signing key; `vulnex.cli init-pki` never overwrites keys                                                                                                      | `engines/api/src/vulnex/pki.py`, `cli.py`                | IMPLEMENTED, TESTED (7 tests)                                                                   |
+| Migration `0005`: `auth.worker_enrollment`, `auth.worker_certificate`, `app.scan` (FORCE RLS), `app.worker.version`, 10 definer functions                                                                                           | `engines/api/migrations/versions/0005_workers_scans.py`  | IMPLEMENTED, TESTED (round trip; applied to the dev database)                                   |
+| Control-plane API: enrollment tokens (shown once, SHA-256 stored), worker list with online/stale state, revocation; scans (authorized scope and in-scope active assets required, idempotency key, list, detail with result, cancel) | `engines/api/src/vulnex/workers.py`, `scans.py`          | IMPLEMENTED, TESTED (11 + 9 route-matrix probes)                                                |
+| Worker API `/worker/v1`: enroll, renew, heartbeat, lease (re-checks authorization and every target, signs the lease), extend, submit; queue sweeper thread every 10 s                                                               | `engines/api/src/vulnex/worker_api.py`                   | IMPLEMENTED, TESTED (11 tests)                                                                  |
+| Scanner: enrollment with a local key, mTLS client pinned to the endpoint CA, lease verification, `scope.check`, local scope ceiling, renewal, revocation (deletes keys, exit 3), clock-skew check                                   | `engines/scanner/`                                       | IMPLEMENTED, TESTED (4 unit tests; 6 tests against the real worker API in process; Compose run) |
+| Compose: `init-pki` (keys in a named volume; the user-facing API mounts only the public CA), `worker-api` (no published port), `gateway` (Caddy 2.10.2, TLS 1.3, client certificates), `scanner` (profile)                          | `deploy/compose/`                                        | IMPLEMENTED, VERIFIED on the dev machine                                                        |
+| Console: Scans list and detail (auto-refresh while running, cancel, report), Scanners (status, enroll with a one-time bundle download, withdraw token, revoke), "Run scope check" on an asset                                       | `src/routes/(app)/scans/**`, `workers/**`, `assets/[id]` | IMPLEMENTED, TESTED (svelte-check, lint; browser walkthrough)                                   |
 
-- **Queue semantics (INITIAL_ARCHITECTURE §7.1, ADR-0003):** at-least-once delivery with idempotent effects; claim with `FOR UPDATE SKIP LOCKED` and a fresh random lease per claim; claims limited to the worker's own tenant **and** scope group and to active workers; lease extension that carries the cancel flag and cannot revive an expired lease; results keyed by `(job, attempt, seq)` and bound to the lease; stale results quarantined, never applied; completion and its final result in one transaction; retries with exponential backoff and jitter, then `dead`; `refused` never retried; a sweeper for expired leases that is safe to run concurrently; per-tenant idempotent enqueue; tenant-scoped cancellation.
-- **Privileges:** the application role has no table privileges on `queue.*` and cannot delete workers; every path is a definer function (verified by tests).
-- **Tests:** 27 in `engines/api/tests/test_queue_db.py`. Two were mutation-checked: removing the claim's row lock makes the concurrent-claimers test fail (a job was handed out twice), and removing the scope-group filter makes the isolation test fail.
-- Deleting a scope group that a worker or job uses returns 409 (it returned 500 before).
-- **Not yet done:** the load test from §7.1 (10,000 jobs, 4 claimers); nothing calls the queue from the API yet (increment 3); nothing runs `queue.sweep()` periodically yet.
+**API endpoints added:** `GET /api/v1/workers`, `POST /api/v1/workers/{worker_id}/revoke`, `GET|POST /api/v1/workers/enrollments`, `DELETE /api/v1/workers/enrollments/{enrollment_id}`, `GET|POST /api/v1/scans`, `GET /api/v1/scans/{scan_id}`, `POST /api/v1/scans/{scan_id}/cancel`. Worker API (separate app, behind the gateway): `POST /worker/v1/enroll|renew|heartbeat|lease|tasks/extend|tasks/submit`.
+
+**Security controls verified:** cross-tenant probes for all 9 new routes; the scanner refuses a tampered lease (signature), targets outside the signed scope (including `169.254.169.254`), targets outside its local ceiling, and oversized ranges; scope changed after a scan was requested is refused at lease time (mutation-checked: removing the authorization re-check fails a test, and the per-target check still refuses on its own); revocation releases leases and the scanner deletes its keys.
+
+**Real-network run on 2026-11-08 (Compose on the dev machine; target `192.0.2.0/28`, RFC 5737 documentation space; no packets are sent to targets in M4):** scanner enrolled over mTLS through Caddy; scan queued → completed with the report (16 addresses); header without a certificate → 401; certificate from a foreign CA → TLS handshake refused; worker API not reachable from the host; after revocation the scanner exited with code 3 and its key and certificate were gone. The same flow was then repeated from the console in a headless browser (enroll from the Scanners page with the downloaded bundle, "Run scope check" on an asset, report shown).
+
+**Found and fixed during verification:** (1) the endpoint certificate lacked an Authority Key Identifier, which Python 3.13's strict verification requires (enrollment failed over real TLS); fixed and covered by a test. (2) The Caddyfile both deleted and set the fingerprint header; Caddy applies deletes after sets, so the header never arrived; fixed (a set replaces any client copy, verified by the spoofing test above). (3) `.dockerignore` re-included `__pycache__` for the protocol package; fixed.
+
+### Known limitations (M4)
+
+- No network probing: `scope.check` only. DNS resolution, per-address destination checks at connect time, redirects and the ADR-0006 destination fixtures are M5, after the Astra 6 review.
+- The signed lease covers the first lease period (≤ 5 min) and is not re-signed on extension; fine for M4 tasks, required before longer M5 tasks.
+- The scanner polls every 5 s when idle (no long-poll). One task at a time.
+- No CRL/OCSP: revocation is enforced by the worker API's certificate lookup. Keys are files (mode 0600), not in an HSM or OS keystore.
+- No rate limit on `/worker/v1/enroll` (256-bit token; 1 MB request limit at the gateway).
+- The Scans list shows the newest 100 (with the total); no paging or filters yet.
+- The queue load test (10,000 jobs, 4 claimers) is still NOT RUN.
 
 ## M3 authorized scope and asset inventory: **IMPLEMENTED, TESTED locally (2026-11-08); committed `8d6912a`; CI NOT RUN**
 
@@ -97,12 +118,15 @@ Dependabot (npm, uv, Actions, Docker), `SECURITY.md` (PROPOSED; contact address 
 
 ## Completed
 
-| Item                                                                                                      | Status                                   |
-| --------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| M2 identity and organizations (sessions, roles, members, audit, console sign-in)                          | IMPLEMENTED, TESTED, committed `07a51dc` |
-| M1 application foundation (FastAPI, Alembic `0001`, roles, Compose, status page, CI workflow)             | IMPLEMENTED, TESTED, committed `66a3fdb` |
-| Phase 0 documents (PRD v0.1 + Amendment A, research, architecture, threat model, ADR-0001, roadmap, DoD)  | committed `d7df12e`; PROPOSED            |
-| ADR-0002, ADR-0005, ADR-0006, architecture v0.2, threat model v0.2, GitHub setup, mandate, DEVELOPMENT.md | committed `66a3fdb`; PROPOSED            |
+| Item                                                                                                      | Status                                               |
+| --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| M4 increments 2–3 (worker trust, signed scope leases, scanner `scope.check`, scans, console)              | IMPLEMENTED, TESTED, committed locally (this commit) |
+| M4 increment 1 (PostgreSQL job queue, ADR-0003)                                                           | IMPLEMENTED, TESTED, committed `9d56e7f`             |
+| M3 authorized scope and asset inventory                                                                   | IMPLEMENTED, TESTED, committed `8d6912a`             |
+| M2 identity and organizations (sessions, roles, members, audit, console sign-in)                          | IMPLEMENTED, TESTED, committed `07a51dc`             |
+| M1 application foundation (FastAPI, Alembic `0001`, roles, Compose, status page, CI workflow)             | IMPLEMENTED, TESTED, committed `66a3fdb`             |
+| Phase 0 documents (PRD v0.1 + Amendment A, research, architecture, threat model, ADR-0001, roadmap, DoD)  | committed `d7df12e`; PROPOSED                        |
+| ADR-0002, ADR-0005, ADR-0006, architecture v0.2, threat model v0.2, GitHub setup, mandate, DEVELOPMENT.md | committed `66a3fdb`; PROPOSED                        |
 
 ADR-0003 (queue) and ADR-0007 (plugins) are **not drafted**; their designs are in architecture §7.1 and §5.4.
 
@@ -139,7 +163,7 @@ Standing founder constraint: **no additional infrastructure without a demonstrat
 
 1. Founder: inspect ADR-0001 and rule on D1, D4, D7; set the security contact in `SECURITY.md`.
 2. Founder: create the private GitHub repository (D8) so CI, gitleaks and Dependabot actually run.
-3. Astra 6 reviews the architecture package plus the M1/M2/M3 addenda ([AGENT_HANDOFF.md](AGENT_HANDOFF.md)).
+3. Astra 6 reviews the architecture package plus the M1–M4 addenda ([AGENT_HANDOFF.md](AGENT_HANDOFF.md)).
 4. Research P0 items R1, R3, R4, R10.
 
 ## Known bugs
@@ -159,21 +183,24 @@ None open. Found and fixed during M3 verification: (a) the add-asset form defaul
 
 None known in code. Design-level accepted risks needing founder acknowledgment: [THREAT_MODEL.md §5](docs/security/THREAT_MODEL.md), plus the M2 trade-offs listed under "Known limitations" above (e-mail lockout window, unauthenticated `/readyz` version).
 
-## Actual test results (2026-11-08, Windows dev machine, `feature/m4-scanner`, uncommitted M4 increment 1)
+## Actual test results (2026-11-08, Windows dev machine, `feature/m4-scanner`, M4 increments 2–3, before commit)
 
-| Command                                                                  | Result                                                                                                                 |
-| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| `sh scripts/check-api.sh` (Linux container, PostgreSQL 17 from Compose)  | ruff PASS, ruff format PASS, mypy `--strict` PASS, **pytest 194 passed**, 0 skipped (M3: 166)                          |
-| Mutation checks on `0004` (row lock removed; scope-group filter removed) | the targeted test **failed** each time, as it should; file restored                                                    |
-| `npm run lint`                                                           | PASS                                                                                                                   |
-| Compose: migration `0003 → 0004` on the existing dev volume; `/readyz`   | PASS (`{"status":"ready","version":"0.1.0"}`)                                                                          |
-| Console checks (`npm run check`, vitest, Playwright)                     | not re-run for increment 1: no console code changed since M3 (`8d6912a`, where they passed: 0 errors, 24 and 2 passed) |
-| Queue load test (10,000 jobs, 4 claimers)                                | NOT RUN                                                                                                                |
-| Host `uv run pytest` / `uv run mypy`                                     | **BLOCKED** by Windows Smart App Control (environment, not code); same checks pass in the container                    |
-| GitHub Actions                                                           | NOT RUN (no remote)                                                                                                    |
+| Command                                                                                  | Result                                                                                                                                                                     |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sh scripts/check-api.sh` (Linux container, PostgreSQL 17 from Compose)                  | ruff PASS, ruff format PASS, mypy `--strict` PASS (48 files), **pytest 257 passed**, 0 skipped (increment 1: 194)                                                          |
+| Mutation checks                                                                          | scans without the authorization gate; worker API without the lease-time re-check; endpoint certificate without AKI: the targeted test **failed** each time; files restored |
+| `npm run lint`                                                                           | PASS                                                                                                                                                                       |
+| `npm run check`                                                                          | PASS, 0 errors, 0 warnings                                                                                                                                                 |
+| `npx vitest run`                                                                         | 24 passed                                                                                                                                                                  |
+| `npx playwright test`                                                                    | 2 passed                                                                                                                                                                   |
+| Compose: migration `0004 → 0005` on the dev volume, `/readyz`                            | PASS                                                                                                                                                                       |
+| Compose real-network run (mTLS through Caddy, scanner container) and console walkthrough | PASS, details under M4 above                                                                                                                                               |
+| Queue load test (10,000 jobs, 4 claimers)                                                | NOT RUN                                                                                                                                                                    |
+| Host `uv run pytest` / `uv run mypy`                                                     | **BLOCKED** by Windows Smart App Control (environment, not code); same checks pass in the container                                                                        |
+| GitHub Actions                                                                           | NOT RUN (no remote)                                                                                                                                                        |
 
 ## Next recommended task
 
-1. **Founder: decide how to proceed with the scanner's security design (ADR-0006).** Increments 2 and 3 implement the worker trust model, which the Master Operating Prompt says not to start until its security boundaries are approved. Options: (a) approve ADR-0006 as written; (b) approve it for implementation now, with Astra 6 review before any scan touches a real network (M5); (c) wait for Astra 6 first. Increment 2 also adds Caddy as a reverse proxy for mTLS (ADR-0006 §2) and the `cryptography` Python library.
-2. **Founder:** approve committing M4 increment 1 (queue); create the private GitHub repository; set the `SECURITY.md` contact.
-3. Astra 6 review of the architecture package plus the M1–M4 addenda remains open.
+1. **Astra 6:** review ADR-0006 and its M4 implementation notes (deviations listed there) **before M5**, the first milestone that sends packets to real systems. Also open: ADR-0001/2/3/5 and the M1–M4 addenda in [AGENT_HANDOFF.md](AGENT_HANDOFF.md).
+2. **Founder:** create the private GitHub repository (D8) so CI, gitleaks and Dependabot run; set the `SECURITY.md` contact; rule on D1, D4, D7.
+3. **Claude, next:** the queue load test; then M5 planning (DNS resolution and per-address checks at connect time, TCP port checks, service identification, TLS metadata, evidence storage) with the destination fixtures from ADR-0006 as the first tests. Nmap stays out until research R1 (licensing) is done.

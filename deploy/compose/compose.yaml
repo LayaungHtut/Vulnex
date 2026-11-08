@@ -42,10 +42,85 @@ services:
       # from the Docker bridge gateway. Believe its X-Forwarded-For so per-address sign-in
       # throttling sees browsers, not the console. Only loopback can reach the published port.
       VULNEX_TRUSTED_PROXIES: ${VULNEX_TRUSTED_PROXIES:-172.16.0.0/12}
+      # Scanner enrollment (ADR-0006). Workers connect to this URL; the API only needs the
+      # endpoint's public CA certificate, never a private key.
+      VULNEX_WORKER_ENDPOINT_URL: ${VULNEX_WORKER_ENDPOINT_URL:-https://gateway:8443}
+      VULNEX_WORKER_ENDPOINT_CA_FILE: /pki-public/server-ca.crt
+    volumes:
+      - worker-pki-public:/pki-public:ro
     ports:
       - 127.0.0.1:8000:8000
     depends_on:
       migrate: { condition: service_completed_successfully }
+      init-pki: { condition: service_completed_successfully }
+
+  # ---- scanner workers (ADR-0006) ----
+
+  # Creates the worker CA, endpoint TLS and scope-signing keys once, in a named volume (never in
+  # the repository tree). Re-running is a no-op. Key files end up owned by the API image's user.
+  init-pki:
+    build: { context: ../.., dockerfile: engines/api/Dockerfile }
+    user: '0'
+    command:
+      - sh
+      - -c
+      - >-
+        [ -f /pki/worker-ca.key ] ||
+        python -m vulnex.cli init-pki --out /pki
+        --server-name gateway --server-name localhost --server-name 127.0.0.1;
+        chown -R vulnex /pki && chmod 0700 /pki &&
+        cp /pki/server-ca.crt /pki-public/server-ca.crt && chmod 0644 /pki-public/server-ca.crt
+    volumes:
+      - worker-pki:/pki
+      - worker-pki-public:/pki-public
+
+  # Worker protocol (/worker/v1) and the queue sweeper. Internal only: reachable through the
+  # gateway, which is what makes the certificate header trustworthy. No published port.
+  worker-api:
+    build: { context: ../.., dockerfile: engines/api/Dockerfile }
+    command:
+      [
+        uvicorn,
+        --factory,
+        'vulnex.worker_api:create_worker_app',
+        --host,
+        0.0.0.0,
+        --port,
+        '8001',
+        --no-access-log
+      ]
+    environment:
+      VULNEX_DATABASE_URL: postgresql+psycopg://vulnex_app:${VULNEX_APP_PASSWORD}@db:5432/vulnex
+      VULNEX_WORKER_PKI_DIR: /pki
+    volumes:
+      - worker-pki:/pki:ro
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      init-pki: { condition: service_completed_successfully }
+
+  gateway:
+    image: caddy:2.10.2-alpine
+    volumes:
+      - ./gateway/Caddyfile:/etc/caddy/Caddyfile:ro
+      - worker-pki:/pki:ro
+    ports:
+      - 127.0.0.1:8443:8443
+    depends_on:
+      worker-api: { condition: service_started }
+
+  # A scanner worker for the local lab. Enroll once with a bundle from the console (Workers):
+  #   docker compose -f deploy/compose/compose.yaml run --rm -T scanner enroll --bundle - < b.json
+  #   docker compose -f deploy/compose/compose.yaml --profile scanner up -d scanner
+  scanner:
+    profiles: [scanner]
+    build: { context: ../.., dockerfile: engines/scanner/Dockerfile }
+    volumes:
+      - scanner-state:/var/lib/vulnex-scanner
+    depends_on:
+      gateway: { condition: service_started }
 
 volumes:
   db-data:
+  worker-pki:
+  worker-pki-public:
+  scanner-state:

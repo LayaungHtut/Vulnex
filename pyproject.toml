@@ -1,6 +1,6 @@
 # uv workspace root (ADR-0002, PROPOSED). Python members live under engines/ and packages/.
 [tool.uv.workspace]
-members = ["engines/api"]
+members = ["engines/api", "engines/scanner", "packages/worker-protocol"]
 
 [tool.ruff]
 line-length = 100
@@ -8,6 +8,9 @@ target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "S", "BLE", "SIM", "RUF"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["vulnex", "vulnex_worker_protocol", "vulnex_scanner"]
 
 [tool.ruff.lint.per-file-ignores]
 # Tests: asserts, fixed test passwords, and SQL built from catalog/parametrize constants.
@@ -20,6 +23,6 @@ strict = true
 plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
-testpaths = ["engines/api/tests"]
+testpaths = ["engines/api/tests", "engines/scanner/tests", "packages/worker-protocol/tests"]
 addopts = "-ra --strict-markers"
 markers = ["db: needs PostgreSQL (VULNEX_TEST_OWNER_URL and VULNEX_TEST_APP_URL)"]

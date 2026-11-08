@@ -3,6 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
+
 from vulnex.main import create_app
 from vulnex.settings import Settings
 
@@ -74,6 +75,7 @@ def test_openapi_is_versioned(client: TestClient) -> None:
 def test_schema_revision_matches_migration_head() -> None:
     from alembic.script import ScriptDirectory
     from conftest import alembic_config
+
     from vulnex.db import SCHEMA_REVISION
 
     assert ScriptDirectory.from_config(alembic_config()).get_current_head() == SCHEMA_REVISION

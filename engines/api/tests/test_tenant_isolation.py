@@ -8,11 +8,13 @@ A new route without a probe fails `test_every_route_is_in_the_matrix`.
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from conftest import PASSWORD, Org, api_operations, bearer, login, needs_db, unique_email
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import Engine, text
 
 pytestmark = needs_db
 
@@ -283,6 +285,123 @@ M3_PROBES: dict[tuple[str, str], Callable[[TestClient, Pair], None]] = {
 }
 
 
+@dataclass
+class M4Data:
+    group: str
+    asset: str
+    scan: str
+    enrollment: str
+    worker: str
+
+
+def a_m4(client: TestClient, p: Pair) -> M4Data:
+    """Tenant A with an authorized group, a queued scan, an unused enrollment and a worker."""
+    d = a_data(client, p)
+    h = bearer(p.token_a)
+    r = client.post(
+        f"/api/v1/scope-groups/{d.group}/authorization", headers=h, json={"confirm": True}
+    )
+    assert r.status_code == 200
+    scan = client.post("/api/v1/scans", headers=h, json={"asset_ids": [d.asset]}).json()["id"]
+    r = client.post(
+        "/api/v1/workers/enrollments", headers=h, json={"scope_group_id": d.group, "name": "a-e"}
+    )
+    engine: Engine = cast(FastAPI, client.app).state.engine
+    with engine.begin() as c:
+        c.execute(text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(p.a.id)})
+        worker = c.execute(
+            text(
+                "INSERT INTO app.worker (tenant_id, scope_group_id, name) "
+                "VALUES (:t, :g, 'a-worker') RETURNING id"
+            ),
+            {"t": p.a.id, "g": d.group},
+        ).scalar_one()
+    return M4Data(d.group, d.asset, scan, r.json()["id"], str(worker))
+
+
+def a_get(client: TestClient, p: Pair, path: str) -> Any:
+    r = client.get(path, headers=bearer(p.token_a))
+    assert r.status_code == 200
+    return r.json()
+
+
+def probe_list_workers(client: TestClient, p: Pair) -> None:
+    d = a_m4(client, p)
+    r = client.get("/api/v1/workers", headers=bearer(p.token_b))
+    assert r.status_code == 200 and r.json() == [] and d.worker not in r.text
+
+
+def probe_revoke_worker(client: TestClient, p: Pair) -> None:
+    d = a_m4(client, p)
+    r = client.post(f"/api/v1/workers/{d.worker}/revoke", headers=bearer(p.token_b))
+    assert r.status_code == 404
+    assert a_get(client, p, "/api/v1/workers")[0]["status"] == "active"
+
+
+def probe_list_enrollments(client: TestClient, p: Pair) -> None:
+    d = a_m4(client, p)
+    r = client.get("/api/v1/workers/enrollments", headers=bearer(p.token_b))
+    assert r.status_code == 200 and r.json() == [] and d.enrollment not in r.text
+
+
+def probe_create_enrollment(client: TestClient, p: Pair) -> None:
+    """IDOR: B names A's scope group."""
+    d = a_m4(client, p)
+    r = client.post(
+        "/api/v1/workers/enrollments",
+        headers=bearer(p.token_b),
+        json={"scope_group_id": d.group, "name": "b-e"},
+    )
+    assert r.status_code == 404
+    assert len(a_get(client, p, "/api/v1/workers/enrollments")) == 1
+
+
+def probe_revoke_enrollment(client: TestClient, p: Pair) -> None:
+    d = a_m4(client, p)
+    r = client.delete(f"/api/v1/workers/enrollments/{d.enrollment}", headers=bearer(p.token_b))
+    assert r.status_code == 404
+    assert a_get(client, p, "/api/v1/workers/enrollments")[0]["status"] == "pending"
+
+
+def probe_list_scans(client: TestClient, p: Pair) -> None:
+    d = a_m4(client, p)
+    r = client.get("/api/v1/scans", headers=bearer(p.token_b))
+    assert r.status_code == 200 and r.json()["total"] == 0 and d.scan not in r.text
+
+
+def probe_create_scan(client: TestClient, p: Pair) -> None:
+    """IDOR: B names A's asset."""
+    d = a_m4(client, p)
+    r = client.post("/api/v1/scans", headers=bearer(p.token_b), json={"asset_ids": [d.asset]})
+    assert r.status_code == 404
+    assert a_get(client, p, "/api/v1/scans")["total"] == 1
+
+
+def probe_get_scan(client: TestClient, p: Pair) -> None:
+    d = a_m4(client, p)
+    assert client.get(f"/api/v1/scans/{d.scan}", headers=bearer(p.token_b)).status_code == 404
+
+
+def probe_cancel_scan(client: TestClient, p: Pair) -> None:
+    d = a_m4(client, p)
+    r = client.post(f"/api/v1/scans/{d.scan}/cancel", headers=bearer(p.token_b))
+    assert r.status_code == 404
+    assert a_get(client, p, f"/api/v1/scans/{d.scan}")["state"] == "queued"
+
+
+M4_PROBES: dict[tuple[str, str], Callable[[TestClient, Pair], None]] = {
+    ("GET", "/api/v1/workers"): probe_list_workers,
+    ("POST", "/api/v1/workers/{worker_id}/revoke"): probe_revoke_worker,
+    ("GET", "/api/v1/workers/enrollments"): probe_list_enrollments,
+    ("POST", "/api/v1/workers/enrollments"): probe_create_enrollment,
+    ("DELETE", "/api/v1/workers/enrollments/{enrollment_id}"): probe_revoke_enrollment,
+    ("GET", "/api/v1/scans"): probe_list_scans,
+    ("POST", "/api/v1/scans"): probe_create_scan,
+    ("GET", "/api/v1/scans/{scan_id}"): probe_get_scan,
+    ("POST", "/api/v1/scans/{scan_id}/cancel"): probe_cancel_scan,
+}
+
+
 PROBES: dict[tuple[str, str], Callable[[TestClient, Pair], None]] = {
     ("GET", "/api/v1/auth/session"): probe_session,
     ("POST", "/api/v1/auth/logout"): probe_logout,
@@ -293,6 +412,7 @@ PROBES: dict[tuple[str, str], Callable[[TestClient, Pair], None]] = {
     ("DELETE", "/api/v1/members/{user_id}"): probe_remove_member,
     ("GET", "/api/v1/audit-events"): probe_audit,
     **M3_PROBES,
+    **M4_PROBES,
 }
 
 

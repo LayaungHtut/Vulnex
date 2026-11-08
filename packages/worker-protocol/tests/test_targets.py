@@ -1,7 +1,8 @@
 """Target parsing and scope membership (ADR-0006 §5 steps 1-5). Pure functions: no database."""
 
 import pytest
-from vulnex.targets import (
+
+from vulnex_worker_protocol.targets import (
     ASSET_MIN_PREFIX,
     SCOPE_MIN_PREFIX,
     Kind,

@@ -1,0 +1,37 @@
+# Worker endpoint gateway (ADR-0006 §2). Terminates TLS for scanner workers, verifies their
+# client certificates against the worker CA, and tells the worker API which certificate it saw.
+#
+# The worker API trusts X-Vulnex-Client-Cert-Sha256 and nothing else, so this file must:
+#   - set that header from the verified handshake, replacing any copy a client sends (a set
+#     replaces; do not add a "-" delete as well: Caddy applies deletes after sets);
+#   - be the only way to reach the worker API (it listens on the internal network only).
+# `verify_if_given`: enrollment has no certificate yet (its single-use token is the credential);
+# a certificate that is presented but does not chain to the worker CA fails the handshake.
+{
+	auto_https off
+	admin off
+}
+
+https://:8443 {
+	tls /pki/server.crt /pki/server.key {
+		protocols tls1.3
+		client_auth {
+			mode verify_if_given
+			trust_pool file /pki/worker-ca.crt
+		}
+	}
+
+	request_body {
+		max_size 1MB
+	}
+
+	handle /worker/v1/* {
+		reverse_proxy worker-api:8001 {
+			header_up X-Vulnex-Client-Cert-Sha256 {http.request.tls.client.fingerprint}
+		}
+	}
+
+	handle {
+		respond 404
+	}
+}

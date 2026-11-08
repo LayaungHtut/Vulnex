@@ -103,8 +103,20 @@
 	</p>
 {/if}
 
+{#if can(data.session, 'scans.run') && a.status === 'active' && a.scope.in_scope && a.scope.authorized}
+	<form method="POST" action="?/scan" use:enhance class="mt-4 flex flex-wrap items-center gap-3">
+		<button class="rounded bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
+			>Run scope check</button
+		>
+		<span class="text-sm text-slate-500"
+			>A scanner of "{a.scope_group_name}" checks which addresses it may assess. It sends no traffic
+			to the target.</span
+		>
+	</form>
+{/if}
+
 <p class="mt-4 text-sm text-slate-500">
-	Services and findings appear here once scanning is available (milestones M4–M7).
+	Services and findings appear here once network scanning is available (milestones M5–M7).
 </p>
 
 {#if manage}

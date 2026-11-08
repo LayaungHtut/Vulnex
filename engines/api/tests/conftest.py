@@ -16,9 +16,12 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from sqlalchemy import Engine, create_engine
+
 from vulnex.cli import create_organization
 from vulnex.main import create_app
+from vulnex.pki import init_pki
 from vulnex.settings import Settings
+from vulnex.worker_api import create_worker_app
 
 OWNER_URL = os.environ.get("VULNEX_TEST_OWNER_URL")
 APP_URL = os.environ.get("VULNEX_TEST_APP_URL")
@@ -63,9 +66,29 @@ def owner_engine(migrated: None) -> Iterator[Engine]:
 
 
 @pytest.fixture(scope="session")
-def client(migrated: None) -> TestClient:
+def pki_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    d = tmp_path_factory.mktemp("pki")
+    init_pki(d, ["localhost", "127.0.0.1"])
+    return d
+
+
+@pytest.fixture(scope="session")
+def client(migrated: None, pki_dir: Path) -> TestClient:
     assert APP_URL
-    return TestClient(create_app(Settings(database_url=SecretStr(APP_URL))))
+    settings = Settings(
+        database_url=SecretStr(APP_URL),
+        worker_endpoint_url="https://localhost:8443",
+        worker_endpoint_ca_file=pki_dir / "server-ca.crt",
+    )
+    return TestClient(create_app(settings))
+
+
+@pytest.fixture(scope="session")
+def wclient(migrated: None, pki_dir: Path) -> TestClient:
+    """The worker API. No `with` block, so its sweeper thread stays off in tests."""
+    assert APP_URL
+    settings = Settings(database_url=SecretStr(APP_URL), worker_pki_dir=pki_dir)
+    return TestClient(create_worker_app(settings))
 
 
 @dataclass

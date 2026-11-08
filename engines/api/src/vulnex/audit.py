@@ -46,6 +46,25 @@ def record(
     )
 
 
+def record_worker(
+    conn: Connection, worker_id: uuid.UUID, action: str, detail: dict[str, Any] | None = None
+) -> None:
+    """An event caused by a scanner worker (no user actor). Tenant context must be set."""
+    conn.execute(
+        text(
+            "INSERT INTO app.audit_event (tenant_id, action, target_type, target_id, request_id, "
+            "detail) VALUES (app.current_tenant(), :action, 'worker', :w, :rid, "
+            "CAST(:detail AS jsonb))"
+        ),
+        {
+            "action": action,
+            "w": str(worker_id),
+            "rid": logs.request_id.get(),
+            "detail": json.dumps(detail or {}),
+        },
+    )
+
+
 class AuditEventOut(BaseModel):
     id: int
     occurred_at: datetime

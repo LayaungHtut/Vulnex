@@ -1,7 +1,9 @@
 import { ApiError, api } from '#lib/server/api.js';
 import { field, loadOne, mutate } from '#lib/server/actions.js';
 import { requireSession } from '#lib/server/session.js';
-import { CRITICALITIES, can, type Asset, type AuditPage } from '#lib/types.js';
+import { redirect } from '@sveltejs/kit';
+import { resolve } from '$app/paths';
+import { CRITICALITIES, can, type Asset, type AuditPage, type Scan } from '#lib/types.js';
 import type { Actions, PageServerLoad } from './$types';
 
 const base = (id: string) => `/api/v1/assets/${encodeURIComponent(id)}`;
@@ -59,5 +61,17 @@ export const actions: Actions = {
 			'assets.manage',
 			{ path: `${base(event.params.id)}/reactivate`, method: 'POST' },
 			'Asset reactivated.'
-		)
+		),
+
+	scan: async (event) => {
+		const result = await mutate<Scan>(
+			event,
+			'scan',
+			'scans.run',
+			{ path: '/api/v1/scans', method: 'POST', body: { asset_ids: [event.params.id] } },
+			(s) => s.id
+		);
+		if ('success' in result) redirect(303, resolve('/(app)/scans/[id]', { id: result.success }));
+		return result;
+	}
 };

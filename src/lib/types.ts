@@ -10,7 +10,11 @@ export type Permission =
 	| 'scope.read'
 	| 'scope.manage'
 	| 'assets.read'
-	| 'assets.manage';
+	| 'assets.manage'
+	| 'workers.read'
+	| 'workers.manage'
+	| 'scans.read'
+	| 'scans.run';
 
 export const ROLE_LABEL: Record<Role, string> = {
 	owner: 'Owner',
@@ -123,5 +127,65 @@ export interface Asset {
 
 export interface AssetPage {
 	items: Asset[];
+	total: number;
+}
+
+export interface Worker {
+	id: string;
+	name: string;
+	scope_group_id: string;
+	scope_group_name: string;
+	status: 'active' | 'disabled' | 'revoked';
+	connection: 'online' | 'stale' | 'never_connected';
+	last_seen_at: string | null;
+	version: string | null;
+	created_at: string;
+	revoked_at: string | null;
+}
+
+export interface Enrollment {
+	id: string;
+	scope_group_id: string;
+	name: string;
+	created_at: string;
+	expires_at: string;
+	status: 'pending' | 'used' | 'expired' | 'revoked';
+	worker_id: string | null;
+}
+
+export interface EnrollmentCreated {
+	id: string;
+	expires_at: string;
+	bundle: { control_plane_url: string; ca_pem: string; ca_sha256: string; token: string };
+}
+
+export type ScanState = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface ScopeCheckResult {
+	profile: 'scope_check';
+	allowed: { target: string; kind: string; addresses: number | null }[];
+	refused: { target: string; reason: string }[];
+}
+
+export interface Scan {
+	id: string;
+	scope_group_id: string;
+	scope_group_name: string;
+	profile: 'scope_check';
+	asset_ids: string[];
+	targets: string[];
+	requested_by_email: string | null;
+	created_at: string;
+	state: ScanState;
+	attempt: number;
+	max_attempts: number;
+	last_error: string | null;
+	cancel_requested: boolean;
+	finished_at: string | null;
+	result: Partial<ScopeCheckResult> | null;
+}
+
+export interface ScanPage {
+	items: Scan[];
 	total: number;
 }

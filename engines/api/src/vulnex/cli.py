@@ -1,4 +1,6 @@
-"""Operator commands (controlled account provisioning for self-hosted installs).
+"""Operator commands for self-hosted installs: worker PKI and controlled account provisioning.
+
+    python -m vulnex.cli init-pki --out deploy/compose/pki --server-name localhost
 
     python -m vulnex.cli create-organization --name "Acme" --owner-email a@acme.test \
         --owner-name "Ada Admin"
@@ -15,11 +17,13 @@ import json
 import os
 import sys
 import uuid
+from pathlib import Path
 
 from sqlalchemy import Engine, text
 
 from vulnex import security
 from vulnex.db import make_engine
+from vulnex.pki import init_pki
 from vulnex.settings import Settings
 
 
@@ -78,7 +82,23 @@ def main(argv: list[str] | None = None) -> None:
     org.add_argument("--name", required=True)
     org.add_argument("--owner-email", required=True)
     org.add_argument("--owner-name", required=True)
+    pki = sub.add_parser("init-pki", help="create the worker CA, endpoint TLS and signing keys")
+    pki.add_argument("--out", required=True, type=Path)
+    pki.add_argument(
+        "--server-name",
+        action="append",
+        required=True,
+        help="DNS name or IP address of the worker endpoint (repeat for several)",
+    )
     args = parser.parse_args(argv)
+
+    if args.command == "init-pki":
+        try:
+            init_pki(args.out, args.server_name)
+        except FileExistsError as e:
+            sys.exit(str(e))
+        print(f"worker PKI written to {args.out}; keep the .key files secret")
+        return
 
     settings = Settings()  # pyright: ignore[reportCallIssue]  # values come from env
     engine = make_engine(settings.database_url.get_secret_value())

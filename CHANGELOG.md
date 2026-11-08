@@ -4,7 +4,24 @@ All notable changes to VULNEX. Format: [Keep a Changelog](https://keepachangelog
 
 ## [Unreleased]
 
-### Added — M4 increment 1: job queue (not yet committed)
+### Added — M4 increments 2–3: worker trust, signed scope, scanner, scans
+
+- `packages/worker-protocol`: the target parser (moved from the API so scanner and control plane share one set of rules), Ed25519-signed scope leases verified over the exact signed bytes, and the worker protocol models.
+- Worker PKI (`vulnex.pki`, `python -m vulnex.cli init-pki`): worker CA issuing 7-day client certificates (identity set by the server, never by the request), endpoint CA and TLS certificate, scope-signing key. Never overwrites existing keys.
+- Migration `0005`: single-use enrollment tokens (SHA-256 only, at most 24 h), issued-certificate registry, `app.scan` (FORCE RLS), worker version; 10 `SECURITY DEFINER` functions.
+- API: `GET /api/v1/workers`, `POST /api/v1/workers/{id}/revoke` (certificates and leases end at once), enrollment tokens (`GET|POST /api/v1/workers/enrollments`, `DELETE …/{id}`), scans (`GET|POST /api/v1/scans` with `Idempotency-Key`, `GET /api/v1/scans/{id}`, `POST …/cancel`). A scan needs an authorized scope group and active assets inside it. Permissions `workers.read/manage`, `scans.read/run`.
+- Worker API (`vulnex.worker_api`, separate process, `/worker/v1`): enroll, renew, heartbeat, lease (re-checks the authorization and every target, then signs the lease), extend (carries cancellation), submit; queue sweeper every 10 s.
+- Scanner (`engines/scanner`, `vulnex-scanner enroll|run`): key generated locally (0600), mTLS pinned to the endpoint CA, lease verification, the `scope.check` task (no traffic to targets), optional local scope ceiling, certificate renewal, clock-skew check; on revocation it deletes its key and exits with code 3.
+- Compose: `init-pki`, `worker-api` (no published port), `gateway` (Caddy 2.10.2, TLS 1.3, client certificates), `scanner` (profile `scanner`).
+- Console: Scans list and detail (live while running, cancel, report), Scanners (connection state, one-time enrollment bundle download, withdraw token, revoke), "Run scope check" on assets.
+
+### Fixed — M4
+
+- The endpoint TLS certificate lacked an Authority Key Identifier, so Python 3.13 clients refused it.
+- The gateway deleted the certificate header after setting it (Caddy applies deletes after sets).
+- `.dockerignore` re-included `__pycache__` under `packages/worker-protocol`.
+
+### Added — M4 increment 1: job queue (committed `9d56e7f`)
 
 - ADR-0003 (PROPOSED): PostgreSQL pull queue with at-least-once delivery and idempotent effects.
 - Migration `0004`: `app.worker` (tenant- and scope-group-bound, FORCE RLS, not deletable by the application role) and schema `queue` (jobs, results, quarantine), reachable only through `SECURITY DEFINER` functions: `enqueue_scan_task`, `claim_for_worker`, `extend`, `submit_result`, `complete`, `request_cancel`, `sweep`.

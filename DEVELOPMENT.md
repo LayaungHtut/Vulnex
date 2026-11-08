@@ -4,13 +4,15 @@ How to run and check VULNEX locally. This describes what exists today (M1 founda
 
 ## Layout
 
-| Path                    | What                                                                                |
-| ----------------------- | ----------------------------------------------------------------------------------- |
-| `src/`, root JS configs | SvelteKit console (moves to `apps/console` per ADR-0002; not done yet)              |
-| `engines/api/`          | FastAPI control plane, Python package `vulnex`, Alembic migrations, operator CLI    |
-| `deploy/compose/`       | Local stack: PostgreSQL 17, migrations, API                                         |
-| `scripts/`              | `check-api.sh` (Python checks in a container), `hooks/pre-commit` (opt-in git hook) |
-| `pyproject.toml`        | uv workspace root; shared ruff, mypy, pytest config                                 |
+| Path                        | What                                                                                |
+| --------------------------- | ----------------------------------------------------------------------------------- |
+| `src/`, root JS configs     | SvelteKit console (moves to `apps/console` per ADR-0002; not done yet)              |
+| `engines/api/`              | FastAPI control plane, Python package `vulnex`, Alembic migrations, operator CLI    |
+| `engines/scanner/`          | Scanner worker, Python package `vulnex_scanner` (`vulnex-scanner enroll             | run`) |
+| `packages/worker-protocol/` | Shared by API and scanner: target parser, signed scope leases, protocol models      |
+| `deploy/compose/`           | Local stack: PostgreSQL 17, migrations, API, worker API, mTLS gateway, scanner      |
+| `scripts/`                  | `check-api.sh` (Python checks in a container), `hooks/pre-commit` (opt-in git hook) |
+| `pyproject.toml`            | uv workspace root; shared ruff, mypy, pytest config                                 |
 
 ## Prerequisites
 
@@ -69,3 +71,19 @@ uv run alembic revision -m "describe change"   # write the SQL by hand; no autog
 After adding a migration, bump `SCHEMA_REVISION` in `engines/api/src/vulnex/db.py` (a test enforces it; `/readyz` reports 503 until the database is migrated).
 
 Every tenant-owned table must follow [ADR-0005](docs/decisions/ADR-0005.md): `tenant_id`, composite foreign keys, `ENABLE` + `FORCE ROW LEVEL SECURITY`, and a policy, all in the same migration. `test_every_app_table_has_forced_rls_and_a_policy` fails otherwise. Every new `/api/v1` route needs a two-tenant probe in `engines/api/tests/test_tenant_isolation.py`; `test_every_route_is_in_the_matrix` fails otherwise.
+
+## Scanner workers (M4)
+
+`docker compose … up -d --build` also starts `init-pki` (creates the worker CA, endpoint TLS and scope-signing keys once, in the named volume `worker-pki`), `worker-api` (internal only) and `gateway` (Caddy, mTLS on `https://127.0.0.1:8443`). To run a scanner in the lab:
+
+1. In the console: authorize a scope group, then **Scanners → Enroll a scanner**, and download `vulnex-bundle.json` (shown once).
+2. Enroll the Compose scanner and start it:
+
+```sh
+docker compose -f deploy/compose/compose.yaml run --rm -T scanner enroll --bundle - < vulnex-bundle.json
+docker compose -f deploy/compose/compose.yaml --profile scanner up -d scanner
+```
+
+3. On an asset in that scope group, choose **Run scope check**. M4 scanners send no traffic to targets.
+
+The bundle URL defaults to `https://gateway:8443` (the Compose network name). For a scanner outside Compose, set `VULNEX_WORKER_ENDPOINT_URL` (for example `https://127.0.0.1:8443`, which the endpoint certificate also covers) before creating the bundle. Revoking a scanner makes it delete its key and exit with code 3; enroll it again with a new bundle. `docker volume rm vulnex_worker-pki vulnex_worker-pki-public` resets the PKI (every enrolled scanner must then enroll again).

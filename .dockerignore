@@ -3,5 +3,8 @@
 !uv.lock
 !.python-version
 !engines/api/**
+!engines/scanner/**
+!packages/worker-protocol/**
 **/__pycache__
 **/.venv
+**/tests

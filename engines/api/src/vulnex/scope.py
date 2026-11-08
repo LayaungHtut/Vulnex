@@ -21,7 +21,13 @@ from vulnex import audit
 from vulnex.authz import Permission, Principal
 from vulnex.db import tenant_tx
 from vulnex.deps import client_ip, engine_of, require
-from vulnex.targets import Kind, ScopeEntry, TargetError, parse_scope_entry, scope_digest
+from vulnex_worker_protocol.targets import (
+    Kind,
+    ScopeEntry,
+    TargetError,
+    parse_scope_entry,
+    scope_digest,
+)
 
 router = APIRouter(prefix="/api/v1/scope-groups", tags=["scope"])
 

@@ -23,6 +23,10 @@ class Permission(StrEnum):
     SCOPE_MANAGE = "scope.manage"
     ASSETS_READ = "assets.read"
     ASSETS_MANAGE = "assets.manage"
+    WORKERS_READ = "workers.read"
+    WORKERS_MANAGE = "workers.manage"
+    SCANS_READ = "scans.read"
+    SCANS_RUN = "scans.run"
 
 
 _EVERYONE = {Permission.ORGANIZATION_READ}
@@ -30,13 +34,22 @@ _EVERYONE = {Permission.ORGANIZATION_READ}
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
     Role.OWNER: frozenset(Permission),
     Role.ADMIN: frozenset(Permission),  # owner-only restrictions are enforced in members.py
-    # Managing scope and registering targets is "manage scopes" in PRD §10: owner/admin only.
+    # Managing scope, targets and scanners is owner/admin only (PRD §10). Analysts run scans,
+    # but only inside scope an owner or admin has authorized.
     Role.ANALYST: frozenset(
-        _EVERYONE | {Permission.MEMBERS_READ, Permission.SCOPE_READ, Permission.ASSETS_READ}
+        _EVERYONE
+        | {
+            Permission.MEMBERS_READ,
+            Permission.SCOPE_READ,
+            Permission.ASSETS_READ,
+            Permission.WORKERS_READ,
+            Permission.SCANS_READ,
+            Permission.SCANS_RUN,
+        }
     ),
     # Remediation contributors will see assigned assets only (M8); nothing tenant-wide yet.
     Role.REMEDIATION_CONTRIBUTOR: frozenset(_EVERYONE),
-    Role.VIEWER: frozenset(_EVERYONE | {Permission.ASSETS_READ}),
+    Role.VIEWER: frozenset(_EVERYONE | {Permission.ASSETS_READ, Permission.SCANS_READ}),
 }
 
 

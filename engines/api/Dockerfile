@@ -11,6 +11,8 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /src
 COPY pyproject.toml uv.lock .python-version ./
 COPY engines/api engines/api
+COPY packages/worker-protocol packages/worker-protocol
+COPY engines/scanner/pyproject.toml engines/scanner/pyproject.toml
 RUN uv sync --locked --no-dev --no-editable --package vulnex \
     && useradd --system --no-create-home vulnex
 

@@ -22,10 +22,10 @@ export MSYS_NO_PATHCONV=1
 SRC=$(pwd -W 2>/dev/null || pwd)
 
 if [ $# -gt 0 ]; then
-	CMD="uv sync --locked --quiet && uv run $*"
+	CMD="uv sync --locked --all-packages --quiet && uv run $*"
 else
-	CMD="uv sync --locked --quiet && uv run ruff check && uv run ruff format --check \
-		&& uv run mypy engines/api && uv run pytest"
+	CMD="uv sync --locked --all-packages --quiet && uv run ruff check && uv run ruff format --check \
+		&& uv run mypy engines packages && uv run pytest"
 fi
 
 exec docker run --rm \
