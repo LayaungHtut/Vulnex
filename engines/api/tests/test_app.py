@@ -69,3 +69,43 @@ def test_unhandled_error_is_generic_500(client: TestClient) -> None:
 
 def test_openapi_is_versioned(client: TestClient) -> None:
     assert client.get("/api/v1/openapi.json").status_code == 200
+
+
+def test_schema_revision_matches_migration_head() -> None:
+    from alembic.script import ScriptDirectory
+    from conftest import alembic_config
+    from vulnex.db import SCHEMA_REVISION
+
+    assert ScriptDirectory.from_config(alembic_config()).get_current_head() == SCHEMA_REVISION
+
+
+def test_every_non_public_api_route_requires_authentication(client: TestClient) -> None:
+    """No database needed: a missing bearer token is rejected before any query runs."""
+    from conftest import api_operations
+
+    operations = api_operations(client.app) - {("POST", "/api/v1/auth/login")}  # type: ignore[arg-type]
+    assert len(operations) >= 7
+    for method, path in sorted(operations):
+        url = path.replace("{user_id}", "00000000-0000-0000-0000-000000000000")
+        r = client.request(method, url, json={})
+        assert r.status_code == 401, (method, path, r.status_code)
+        assert r.headers["www-authenticate"] == "Bearer"
+
+
+def test_client_ip_trusts_forwarded_for_only_from_trusted_proxies() -> None:
+    from ipaddress import ip_network
+
+    from vulnex.deps import resolve_client_ip
+
+    console = [ip_network("172.16.0.0/12")]
+    # Untrusted peer: its X-Forwarded-For is ignored (a client cannot pick its own address).
+    assert resolve_client_ip("203.0.113.9", "198.51.100.1", console) == "203.0.113.9"
+    # Trusted console forwards the browser's address.
+    assert resolve_client_ip("172.18.0.1", "198.51.100.1", console) == "198.51.100.1"
+    # A spoofed entry to the left of the console's own entry is never reached.
+    assert resolve_client_ip("172.18.0.1", "10.0.0.1, 198.51.100.1", console) == "198.51.100.1"
+    # Garbage or a missing header falls back to the last good address.
+    assert resolve_client_ip("172.18.0.1", "not-an-ip", console) == "172.18.0.1"
+    assert resolve_client_ip("172.18.0.1", None, console) == "172.18.0.1"
+    assert resolve_client_ip("testclient", None, console) is None
+    assert resolve_client_ip("172.18.0.1", "198.51.100.1", []) == "172.18.0.1"

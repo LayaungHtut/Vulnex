@@ -1,4 +1,5 @@
 import { VULNEX_API_URL } from '$app/env/private';
+import { requireSession } from '#lib/server/session.js';
 import type { PageServerLoad } from './$types';
 
 export type ApiStatus =
@@ -6,8 +7,8 @@ export type ApiStatus =
 	| { state: 'unavailable'; detail: string }
 	| { state: 'unreachable' };
 
-// Server-side only: the browser never talks to the API directly yet, so no CORS or proxy is needed.
-export const load: PageServerLoad = async ({ fetch }) => {
+export const load: PageServerLoad = async ({ fetch, locals, url }) => {
+	requireSession(locals, url);
 	let api: ApiStatus;
 	try {
 		// Must exceed the API's own DB connect timeout (3 s, ~4 s measured), or a database outage

@@ -10,11 +10,11 @@ from typing import Any
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException
 
-from vulnex import __version__, logs
+from vulnex import __version__, audit, auth, logs, members
+from vulnex.db import SCHEMA_REVISION, make_engine, schema_revision
 from vulnex.settings import Settings
 
 log = logging.getLogger("vulnex.api")
@@ -39,11 +39,7 @@ def problem(status: int, detail: str | None = None, **extra: Any) -> JSONRespons
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()  # pyright: ignore[reportCallIssue]  # values come from env
     logs.configure(settings.log_level)
-    engine = create_engine(
-        settings.database_url.get_secret_value(),
-        pool_pre_ping=True,
-        connect_args={"connect_timeout": 3},
-    )
+    engine = make_engine(settings.database_url.get_secret_value())
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -58,6 +54,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None,
         openapi_url="/api/v1/openapi.json",
     )
+    app.state.engine = engine
+    app.state.settings = settings
+    for module in (auth, members, audit):
+        app.include_router(module.router)
 
     @app.middleware("http")
     async def request_context(
@@ -109,13 +109,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/readyz", tags=["health"], response_model=None)
     def readyz() -> dict[str, str] | JSONResponse:
-        """Readiness: the database accepts connections as the application role."""
+        """Readiness: the database accepts the application role and its schema is current."""
         try:
             with engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
+                revision = schema_revision(conn)
         except SQLAlchemyError:
             log.warning("readiness check failed", exc_info=True)
             return problem(503, "Database unavailable")
+        if revision != SCHEMA_REVISION:
+            log.warning(
+                "schema revision mismatch",
+                extra={"fields": {"found": revision, "expected": SCHEMA_REVISION}},
+            )
+            return problem(503, "Database schema is not at the expected revision")
         return {"status": "ready", "version": __version__}
 
     return app

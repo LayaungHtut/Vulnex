@@ -1,0 +1,38 @@
+#!/bin/sh
+# VULNEX pre-commit hook (opt-in). Enable once per clone:
+#   git config core.hooksPath scripts/hooks
+# Checks only what is staged, so it stays fast. Bypass in an emergency with `git commit --no-verify`
+# and say so in the commit message; CI runs the same checks anyway.
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+export MSYS_NO_PATHCONV=1
+
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -n "$STAGED" ] || exit 0
+
+# 1. Secrets. Uses Docker so nothing extra is installed on the host.
+if command -v gitleaks >/dev/null 2>&1; then
+	gitleaks git --staged --no-banner --redact
+elif docker info >/dev/null 2>&1; then
+	SRC=$(pwd -W 2>/dev/null || pwd)
+	docker run --rm -v "$SRC:/repo" -w /repo ghcr.io/gitleaks/gitleaks:v8.28.0 \
+		git --staged --no-banner --redact /repo
+else
+	echo "pre-commit: neither gitleaks nor Docker available; secret scan SKIPPED (CI still runs it)" >&2
+fi
+
+# 2. Python lint and format (ruff is a single signed binary; it runs on the Windows host).
+PY=$(printf '%s\n' "$STAGED" | grep -E '\.py$' || true)
+if [ -n "$PY" ]; then
+	# shellcheck disable=SC2086
+	uv run --quiet ruff check $PY
+	# shellcheck disable=SC2086
+	uv run --quiet ruff format --check $PY
+fi
+
+# 3. Prettier on staged web/docs files.
+WEB=$(printf '%s\n' "$STAGED" | grep -E '\.(ts|js|svelte|json|md|yml|yaml|css|html)$' || true)
+if [ -n "$WEB" ]; then
+	# shellcheck disable=SC2086
+	npx --no-install prettier --check --ignore-unknown $WEB
+fi

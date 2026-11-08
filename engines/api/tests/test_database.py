@@ -1,51 +1,20 @@
-"""Empirical checks of ADR-0005 tenant-context behaviour against real PostgreSQL, as `vulnex_app`.
+"""Empirical checks of ADR-0005 tenant-context behaviour on real PostgreSQL, as `vulnex_app`."""
 
-Needs VULNEX_TEST_OWNER_URL and VULNEX_TEST_APP_URL pointing at the `vulnex_test` database
-(see DEVELOPMENT.md). Skipped, visibly, when they are unset; CI always sets them.
-"""
-
-import os
 import uuid
-from collections.abc import Iterator
-from pathlib import Path
 
 import pytest
-from alembic import command
-from alembic.config import Config
+from conftest import APP_URL, needs_db
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import Engine, text
 from sqlalchemy.exc import DBAPIError, ProgrammingError
 from vulnex.main import create_app
 from vulnex.settings import Settings
 
-OWNER_URL = os.environ.get("VULNEX_TEST_OWNER_URL")
-APP_URL = os.environ.get("VULNEX_TEST_APP_URL")
-
-pytestmark = [
-    pytest.mark.db,
-    pytest.mark.skipif(not (OWNER_URL and APP_URL), reason="VULNEX_TEST_*_URL not set"),
-]
+pytestmark = needs_db
 
 SET_TENANT = text("SELECT set_config('app.tenant_id', :t, true)")
 CURRENT = text("SELECT app.current_tenant()")
-
-
-def alembic(url: str) -> Config:
-    cfg = Config(str(Path(__file__).parents[1] / "alembic.ini"))
-    cfg.attributes["url"] = url
-    return cfg
-
-
-@pytest.fixture(scope="module")
-def app_engine() -> Iterator[Engine]:
-    assert OWNER_URL and APP_URL
-    cfg = alembic(OWNER_URL)
-    command.downgrade(cfg, "base")  # migrations must round-trip on a scratch database
-    command.upgrade(cfg, "head")
-    engine = create_engine(APP_URL, pool_size=1, max_overflow=0)
-    yield engine
-    engine.dispose()
 
 
 def test_no_tenant_context_is_null(app_engine: Engine) -> None:

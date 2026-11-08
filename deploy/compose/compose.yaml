@@ -38,6 +38,10 @@ services:
     build: { context: ../.., dockerfile: engines/api/Dockerfile }
     environment:
       VULNEX_DATABASE_URL: postgresql+psycopg://vulnex_app:${VULNEX_APP_PASSWORD}@db:5432/vulnex
+      # The console (on the host) reaches the API through Docker's port forwarding, which arrives
+      # from the Docker bridge gateway. Believe its X-Forwarded-For so per-address sign-in
+      # throttling sees browsers, not the console. Only loopback can reach the published port.
+      VULNEX_TRUSTED_PROXIES: ${VULNEX_TRUSTED_PROXIES:-172.16.0.0/12}
     ports:
       - 127.0.0.1:8000:8000
     depends_on:
