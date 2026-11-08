@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from vulnex.authz import Principal
 
 # The Alembic revision this code expects. A test keeps it equal to the migrations' head.
-SCHEMA_REVISION = "0003"
+SCHEMA_REVISION = "0004"
 
 _SET_CONTEXT = text(
     "SELECT set_config('app.user_id', :user_id, true), "

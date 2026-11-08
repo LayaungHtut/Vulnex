@@ -334,7 +334,7 @@ This differs from the founder's §18 sketch in one way: `intelligence` and `risk
 | ---------------------------------------------------- | ---------------------------------------------------- | ------------ |
 | [0001](../decisions/ADR-0001.md)                     | Modular monolith + separate workers                  | 2            |
 | [0002](../decisions/ADR-0002.md) (drafted, PROPOSED) | Repository layout and toolchain                      | 2            |
-| 0003                                                 | Job transport (PostgreSQL pull queue)                | 4            |
+| [0003](../decisions/ADR-0003.md) (drafted, PROPOSED) | Job transport (PostgreSQL pull queue)                | 4            |
 | 0004                                                 | Identity: OIDC flow, sessions, IdP, MFA verification | 3            |
 | [0005](../decisions/ADR-0005.md) (drafted, PROPOSED) | Tenancy enforcement (RLS + composite keys)           | 3            |
 | [0006](../decisions/ADR-0006.md) (drafted, PROPOSED) | Worker trust, signed scope, destination validation   | 4            |

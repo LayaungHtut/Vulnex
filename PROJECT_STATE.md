@@ -1,12 +1,32 @@
 # VULNEX Project State
 
-Last updated: 2026-11-08 by Claude · Branch: `feature/m3-assets` (from `07a51dc`) · **Last commit: `07a51dc` M2 identity and organizations.** M3 is implemented and tested but **not committed** (awaiting founder approval). M1 is `66a3fdb`. Nothing is pushed (there is no remote).
+Last updated: 2026-11-08 by Claude · Branch: `feature/m4-scanner` (from `8d6912a`) · **Last commit: `8d6912a` M3 authorized scope and asset inventory** (founder: "continue", taken as approval to commit M3). M4 increment 1 is implemented and tested but **not committed**. Nothing is pushed (there is no remote).
 
 ## Current phase
 
-**M3 (authorized scope and asset inventory) is IMPLEMENTED and locally TESTED, not yet committed.** M2 (`07a51dc`) and M1 (`66a3fdb`) are committed. Phase 1 architecture documents remain PROPOSED and await founder and Astra 6 review.
+**M4 (scanner foundation) is in progress.** Increment 1 (PostgreSQL job queue, ADR-0003) is IMPLEMENTED and locally TESTED, not committed. M3 (`8d6912a`), M2 (`07a51dc`) and M1 (`66a3fdb`) are committed. Phase 1 architecture documents remain PROPOSED and await founder and Astra 6 review.
 
-## Current milestone: M3 authorized scope and asset inventory: **IMPLEMENTED, TESTED locally (2026-11-08); NOT committed; CI NOT RUN**
+## Current milestone: M4 scanner foundation: **IN PROGRESS**
+
+M4 is split into three increments so each can be reviewed on its own:
+
+| Increment                          | Content                                                                                                                                                                                              | Status                                                                                        |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| 1. Job queue                       | ADR-0003 (drafted, PROPOSED); migration `0004`: `app.worker`, schema `queue` (jobs, results, quarantine) and 7 `SECURITY DEFINER` functions: enqueue, claim, extend, submit, complete, cancel, sweep | **IMPLEMENTED, TESTED locally; NOT committed**                                                |
+| 2. Worker identity                 | Enrollment tokens, worker CA and client certificates, mTLS termination, revocation, heartbeats (ADR-0006 §1–3, §6)                                                                                   | **NOT IMPLEMENTED: waiting for a founder decision on ADR-0006** (see "Next recommended task") |
+| 3. Scope leases and worker process | Ed25519-signed scope leases from the M3 authorization; worker process that verifies leases and enforces scope with `vulnex.targets`; scan submission API and UI; no network probing (that is M5)     | NOT IMPLEMENTED                                                                               |
+
+### What increment 1 delivers (verified 2026-11-08)
+
+- **Queue semantics (INITIAL_ARCHITECTURE §7.1, ADR-0003):** at-least-once delivery with idempotent effects; claim with `FOR UPDATE SKIP LOCKED` and a fresh random lease per claim; claims limited to the worker's own tenant **and** scope group and to active workers; lease extension that carries the cancel flag and cannot revive an expired lease; results keyed by `(job, attempt, seq)` and bound to the lease; stale results quarantined, never applied; completion and its final result in one transaction; retries with exponential backoff and jitter, then `dead`; `refused` never retried; a sweeper for expired leases that is safe to run concurrently; per-tenant idempotent enqueue; tenant-scoped cancellation.
+- **Privileges:** the application role has no table privileges on `queue.*` and cannot delete workers; every path is a definer function (verified by tests).
+- **Tests:** 27 in `engines/api/tests/test_queue_db.py`. Two were mutation-checked: removing the claim's row lock makes the concurrent-claimers test fail (a job was handed out twice), and removing the scope-group filter makes the isolation test fail.
+- Deleting a scope group that a worker or job uses returns 409 (it returned 500 before).
+- **Not yet done:** the load test from §7.1 (10,000 jobs, 4 claimers); nothing calls the queue from the API yet (increment 3); nothing runs `queue.sweep()` periodically yet.
+
+## M3 authorized scope and asset inventory: **IMPLEMENTED, TESTED locally (2026-11-08); committed `8d6912a`; CI NOT RUN**
+
+Cross-origin form protection on the new M3 pages was verified on a production build before the commit: cross-origin posts to `scope?/create` and `assets?/add` with a valid session cookie → 403; same-origin → work.
 
 ### What M3 delivers (verified 2026-11-08)
 
@@ -139,24 +159,21 @@ None open. Found and fixed during M3 verification: (a) the add-asset form defaul
 
 None known in code. Design-level accepted risks needing founder acknowledgment: [THREAT_MODEL.md §5](docs/security/THREAT_MODEL.md), plus the M2 trade-offs listed under "Known limitations" above (e-mail lockout window, unauthenticated `/readyz` version).
 
-## Actual test results (2026-11-08, Windows dev machine, `feature/m3-assets`, uncommitted M3 tree)
+## Actual test results (2026-11-08, Windows dev machine, `feature/m4-scanner`, uncommitted M4 increment 1)
 
-| Command                                                                 | Result                                                                                                  |
-| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `sh scripts/check-api.sh` (Linux container, PostgreSQL 17 from Compose) | ruff PASS, ruff format PASS, mypy `--strict` PASS (28 files), **pytest 166 passed**, 0 skipped (M2: 60) |
-| `npm run lint`                                                          | PASS                                                                                                    |
-| `npm run check`                                                         | 0 errors, 0 warnings                                                                                    |
-| `npx vitest run`                                                        | 3 files, **24 tests passed** (M2: 18)                                                                   |
-| `npx playwright test` (builds with adapter-node first)                  | **2 passed**; the build succeeded                                                                       |
-| `npm audit --audit-level=high`                                          | PASS (16 low/moderate in dev tooling, unchanged)                                                        |
-| Compose: migration `0002 → 0003` on the existing dev volume; `/readyz`  | PASS (`{"status":"ready","version":"0.1.0"}`)                                                           |
-| Scripted browser walkthrough against the dev stack                      | PASS (see "Browser walkthrough" above)                                                                  |
-| Pre-commit hook                                                         | NOT RUN yet (runs at commit)                                                                            |
-| Host `uv run pytest` / `uv run mypy`                                    | **BLOCKED** by Windows Smart App Control (environment, not code); same checks pass in the container     |
-| GitHub Actions                                                          | NOT RUN (no remote)                                                                                     |
+| Command                                                                  | Result                                                                                                                 |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `sh scripts/check-api.sh` (Linux container, PostgreSQL 17 from Compose)  | ruff PASS, ruff format PASS, mypy `--strict` PASS, **pytest 194 passed**, 0 skipped (M3: 166)                          |
+| Mutation checks on `0004` (row lock removed; scope-group filter removed) | the targeted test **failed** each time, as it should; file restored                                                    |
+| `npm run lint`                                                           | PASS                                                                                                                   |
+| Compose: migration `0003 → 0004` on the existing dev volume; `/readyz`   | PASS (`{"status":"ready","version":"0.1.0"}`)                                                                          |
+| Console checks (`npm run check`, vitest, Playwright)                     | not re-run for increment 1: no console code changed since M3 (`8d6912a`, where they passed: 0 errors, 24 and 2 passed) |
+| Queue load test (10,000 jobs, 4 claimers)                                | NOT RUN                                                                                                                |
+| Host `uv run pytest` / `uv run mypy`                                     | **BLOCKED** by Windows Smart App Control (environment, not code); same checks pass in the container                    |
+| GitHub Actions                                                           | NOT RUN (no remote)                                                                                                    |
 
 ## Next recommended task
 
-1. **Founder:** approve committing M3; create the private GitHub repository; set the `SECURITY.md` contact.
-2. **Claude:** **M4, scanner foundation**: PostgreSQL job queue (ADR-0003 to draft), worker enrollment and heartbeats, signed scope leases built from the M3 authorization digest, and independent scope enforcement in the worker using `vulnex.targets`. M4 depends on ADR-0006 (PROPOSED) for its trust model; implementation can start, but the founder should know that the scanner's security design is not yet independently reviewed.
-3. Astra 6 review of the architecture package plus the M1/M2/M3 addenda remains open.
+1. **Founder: decide how to proceed with the scanner's security design (ADR-0006).** Increments 2 and 3 implement the worker trust model, which the Master Operating Prompt says not to start until its security boundaries are approved. Options: (a) approve ADR-0006 as written; (b) approve it for implementation now, with Astra 6 review before any scan touches a real network (M5); (c) wait for Astra 6 first. Increment 2 also adds Caddy as a reverse proxy for mTLS (ADR-0006 §2) and the `cryptography` Python library.
+2. **Founder:** approve committing M4 increment 1 (queue); create the private GitHub repository; set the `SECURITY.md` contact.
+3. Astra 6 review of the architecture package plus the M1–M4 addenda remains open.

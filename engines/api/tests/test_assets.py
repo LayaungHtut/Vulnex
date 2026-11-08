@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from conftest import PASSWORD, Org, bearer, login, needs_db, unique_email
 from fastapi.testclient import TestClient
+from sqlalchemy import Engine, text
 
 pytestmark = needs_db
 
@@ -258,3 +259,20 @@ def test_role_matrix(
     assert authorize(client, h, g).status_code == expected_authorize
     assert client.get("/api/v1/assets", headers=h).status_code == assets_read
     assert add_asset(client, h, g, "10.60.0.1").status_code == assets_manage
+
+
+def test_scope_group_used_by_a_worker_cannot_be_deleted(
+    client: TestClient, app_engine: Engine, make_org: Callable[..., Org]
+) -> None:
+    org = make_org()
+    h = bearer(login(client, org.owner_email))
+    g = new_group(client, h, name="Worker site")
+    with app_engine.begin() as c:
+        c.execute(text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(org.id)})
+        c.execute(
+            text("INSERT INTO app.worker (tenant_id, scope_group_id, name) VALUES (:t, :g, 'w1')"),
+            {"t": org.id, "g": g},
+        )
+    r = client.delete(f"/api/v1/scope-groups/{g}", headers=h)
+    assert r.status_code == 409 and "scanner workers" in r.json()["detail"]
+    assert client.get(f"/api/v1/scope-groups/{g}", headers=h).status_code == 200

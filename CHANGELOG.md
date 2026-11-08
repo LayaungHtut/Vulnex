@@ -4,7 +4,14 @@ All notable changes to VULNEX. Format: [Keep a Changelog](https://keepachangelog
 
 ## [Unreleased]
 
-### Added — M3 authorized scope and asset inventory (not yet committed)
+### Added — M4 increment 1: job queue (not yet committed)
+
+- ADR-0003 (PROPOSED): PostgreSQL pull queue with at-least-once delivery and idempotent effects.
+- Migration `0004`: `app.worker` (tenant- and scope-group-bound, FORCE RLS, not deletable by the application role) and schema `queue` (jobs, results, quarantine), reachable only through `SECURITY DEFINER` functions: `enqueue_scan_task`, `claim_for_worker`, `extend`, `submit_result`, `complete`, `request_cancel`, `sweep`.
+- Deleting a scope group that a worker or job still uses returns 409 instead of 500.
+- Tests: 27 queue tests (concurrent claimers, tenant and scope-group isolation, leases, duplicates, stale-result quarantine, retries and backoff, cancellation, concurrent sweepers, privileges).
+
+### Added — M3 authorized scope and asset inventory (committed `8d6912a`)
 
 - Migration `0003`: `app.scope_group`, `app.scope_entry`, `app.asset` under FORCE RLS, with composite `(tenant_id, id)` foreign keys; assets cannot be deleted by the application role (retire instead).
 - Strict target parsing (`vulnex.targets`, ADR-0006 §5 steps 1–5): canonical dotted-decimal IPv4 only (integer, hex, octal, short and zero-padded forms are rejected, never reinterpreted); CIDR host bits must be zero; IPv6 refused in v0; loopback, link-local (cloud metadata), "this network", multicast and reserved ranges are never accepted; URLs, ports and non-ASCII hostnames rejected with specific messages.

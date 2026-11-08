@@ -15,6 +15,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import Connection, text
+from sqlalchemy.exc import IntegrityError
 
 from vulnex import audit
 from vulnex.authz import Permission, Principal
@@ -296,10 +297,18 @@ def delete_group(group_id: uuid.UUID, request: Request, principal: Manager) -> R
                 status.HTTP_409_CONFLICT,
                 "This scope group has assets (active or retired); their history depends on it",
             )
-        conn.execute(
-            text("DELETE FROM app.scope_group WHERE tenant_id = app.current_tenant() AND id = :g"),
-            {"g": group_id},
-        )
+        try:
+            conn.execute(
+                text(
+                    "DELETE FROM app.scope_group WHERE tenant_id = app.current_tenant() AND id = :g"
+                ),
+                {"g": group_id},
+            )
+        except IntegrityError:  # workers or scan jobs still reference it (RESTRICT keys)
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "This scope group is used by scanner workers or scan jobs",
+            ) from None
         audit.record(
             conn,
             principal,

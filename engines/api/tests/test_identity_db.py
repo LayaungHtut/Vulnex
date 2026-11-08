@@ -164,10 +164,10 @@ def test_definer_functions_have_fixed_search_path_and_are_not_public(owner_engin
             text(
                 "SELECT p.proname, p.proconfig, p.proacl::text, pg_get_userbyid(p.proowner) "
                 "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
-                "WHERE n.nspname = 'auth' AND p.prosecdef"
+                "WHERE n.nspname IN ('auth', 'queue') AND p.prosecdef"
             )
         ).all()
-    assert len(rows) == 9
+    assert len(rows) == 9 + 7  # auth (M2) + queue (M4)
     for name, config, acl, owner in rows:
         assert owner == "vulnex_owner", name
         assert config == ["search_path=pg_catalog, pg_temp"], name
