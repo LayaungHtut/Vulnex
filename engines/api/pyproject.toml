@@ -7,6 +7,7 @@ dependencies = [
     "alembic>=1.14",
     "argon2-cffi>=23.1",
     "fastapi>=0.115",
+    "httpx>=0.28",
     "psycopg[binary]>=3.2",
     "pydantic-settings>=2.6",
     "sqlalchemy>=2.0.36",
@@ -15,7 +16,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["httpx>=0.28", "mypy>=1.13", "pytest>=8.3", "ruff>=0.8", "vulnex-scanner"]
+dev = ["mypy>=1.13", "pytest>=8.3", "ruff>=0.8", "vulnex-scanner"]
 
 [build-system]
 requires = ["hatchling"]

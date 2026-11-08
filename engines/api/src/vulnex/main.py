@@ -19,6 +19,8 @@ from vulnex import (
     assets,
     audit,
     auth,
+    findings,
+    intel,
     inventory,
     logs,
     members,
@@ -68,7 +70,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.engine = engine
     app.state.settings = settings
-    for module in (auth, members, audit, scope, assets, workers, scans, inventory):
+    for module in (auth, members, audit, scope, assets, workers, scans, inventory, findings, intel):
         app.include_router(module.router)
     install_common(app, engine)
     return app

@@ -167,7 +167,9 @@ def test_definer_functions_have_fixed_search_path_and_are_not_public(owner_engin
                 "WHERE n.nspname IN ('auth', 'queue') AND p.prosecdef"
             )
         ).all()
-    assert len(rows) == 9 + 7 + 10 + 2  # auth (M2) + queue (M4) + workers, scans (M4) + M5
+    assert (
+        len(rows) == 9 + 7 + 10 + 2
+    )  # auth (M2) + queue (M4) + workers, scans (M4) + M5 (M7: none)
     for name, config, acl, owner in rows:
         assert owner == "vulnex_owner", name
         assert config == ["search_path=pg_catalog, pg_temp"], name

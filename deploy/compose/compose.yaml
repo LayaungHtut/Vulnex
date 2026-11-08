@@ -34,6 +34,19 @@ services:
     depends_on:
       db: { condition: service_healthy }
 
+  # Opt-in (it calls NVD, CISA and FIRST over the internet): --profile intel.
+  # Refreshes vulnerability intelligence every 6 h (PRD INT-05). VULNEX_NVD_API_KEY is optional.
+  intel-sync:
+    profiles: [intel]
+    build: { context: ../.., dockerfile: engines/api/Dockerfile }
+    command: [python, -m, vulnex.cli, intel-sync, --every-hours, '6']
+    environment:
+      VULNEX_MIGRATION_DATABASE_URL: postgresql+psycopg://vulnex_owner:${VULNEX_OWNER_PASSWORD}@db:5432/vulnex
+      VULNEX_NVD_API_KEY: ${VULNEX_NVD_API_KEY:-}
+    restart: unless-stopped
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
   api:
     build: { context: ../.., dockerfile: engines/api/Dockerfile }
     environment:

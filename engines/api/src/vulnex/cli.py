@@ -7,6 +7,9 @@
 
 The password is read from VULNEX_BOOTSTRAP_PASSWORD if set, otherwise prompted for twice.
 Runs as the application role (VULNEX_DATABASE_URL), under the same RLS rules as the API.
+    python -m vulnex.cli intel-sync [--source kev|epss|nvd] [--every-hours 6]
+
+intel-sync connects as the owner (VULNEX_MIGRATION_DATABASE_URL); VULNEX_NVD_API_KEY is optional.
 With Compose: docker compose -f deploy/compose/compose.yaml run --rm -it api \
     python -m vulnex.cli create-organization ...
 """
@@ -16,12 +19,13 @@ import getpass
 import json
 import os
 import sys
+import time
 import uuid
 from pathlib import Path
 
 from sqlalchemy import Engine, text
 
-from vulnex import security
+from vulnex import intel, logs, security
 from vulnex.db import make_engine
 from vulnex.pki import init_pki
 from vulnex.settings import Settings
@@ -75,6 +79,35 @@ def _password() -> str:
     return first
 
 
+def intel_sync(sources: list[str], every_hours: float | None) -> None:
+    """Writes the global `intel` schema, so it connects as the owner, never as the API role.
+    Findings pick up the new data at the next scan or on "reassess" (each tenant's own
+    transaction; the owner cannot enumerate tenants under FORCE RLS)."""
+    logs.configure(os.environ.get("VULNEX_LOG_LEVEL", "INFO"))
+    engine = make_engine(os.environ["VULNEX_MIGRATION_DATABASE_URL"])
+    key = os.environ.get("VULNEX_NVD_API_KEY") or None
+    fetch = intel.http_fetcher(key)
+    jobs = {
+        "kev": lambda: intel.sync_kev(engine, fetch),
+        "epss": lambda: intel.sync_epss(engine, fetch),
+        "nvd": lambda: intel.sync_nvd(engine, fetch, api_key=key is not None),
+    }
+    while True:
+        failed = []
+        for name in sources:
+            try:
+                print(f"{name}: {jobs[name]()} records")
+            except intel.IntelError as e:
+                failed.append(name)
+                print(f"{name}: FAILED, previous data kept: {e}", file=sys.stderr)
+        if every_hours is None:
+            engine.dispose()
+            if failed:
+                sys.exit(1)
+            return
+        time.sleep(every_hours * 3600)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="vulnex.cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -90,7 +123,16 @@ def main(argv: list[str] | None = None) -> None:
         required=True,
         help="DNS name or IP address of the worker endpoint (repeat for several)",
     )
+    sync = sub.add_parser(
+        "intel-sync", help="refresh KEV, EPSS and NVD data (needs VULNEX_MIGRATION_DATABASE_URL)"
+    )
+    sync.add_argument("--source", choices=["kev", "epss", "nvd"], action="append")
+    sync.add_argument("--every-hours", type=float, help="keep running, syncing on this interval")
     args = parser.parse_args(argv)
+
+    if args.command == "intel-sync":
+        intel_sync(args.source or ["kev", "epss", "nvd"], args.every_hours)
+        return
 
     if args.command == "init-pki":
         try:

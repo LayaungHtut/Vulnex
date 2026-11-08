@@ -84,6 +84,27 @@ docker compose -f deploy/compose/compose.yaml run --rm -T scanner enroll --bundl
 docker compose -f deploy/compose/compose.yaml --profile scanner up -d scanner
 ```
 
-3. On an asset in that scope group, choose **Run scope check**. M4 scanners send no traffic to targets.
+3. On an asset in that scope group, choose **Run scan** (discovery by default; scope check sends no traffic).
 
 The bundle URL defaults to `https://gateway:8443` (the Compose network name). For a scanner outside Compose, set `VULNEX_WORKER_ENDPOINT_URL` (for example `https://127.0.0.1:8443`, which the endpoint certificate also covers) before creating the bundle. Revoking a scanner makes it delete its key and exit with code 3; enroll it again with a new bundle. `docker volume rm vulnex_worker-pki vulnex_worker-pki-public` resets the PKI (every enrolled scanner must then enroll again).
+
+## Lab targets and discovery (M5)
+
+Only scan systems you own. The `lab` profile starts local targets on an internal Docker network (`172.30.77.0/24`, no internet access): `lab-web` (nginx, .10), `lab-tls` (nginx with an expired self-signed certificate, .11), `lab-ssh` (OpenSSH, .12), `lab-redis` (Redis without authentication, .13).
+
+```sh
+docker compose -f deploy/compose/compose.yaml --profile lab up -d
+```
+
+Authorize a scope group containing `172.30.77.0/28` with an exclusion for `172.30.77.1/32` (the Docker gateway answers on rpcbind), add the asset, enroll a scanner for that group, and run a discovery scan. The Compose `scanner` service joins the `lab` network.
+
+## Vulnerability intelligence (M6)
+
+`intel-sync` writes the global `intel` schema with the owner role and needs internet access to NVD, CISA and FIRST:
+
+```sh
+docker compose -f deploy/compose/compose.yaml run --rm --no-deps migrate python -m vulnex.cli intel-sync            # once: KEV, EPSS, NVD
+docker compose -f deploy/compose/compose.yaml --profile intel up -d intel-sync                                          # every 6 h
+```
+
+KEV and EPSS take seconds; NVD takes several minutes without an API key (public rate limit). Set `VULNEX_NVD_API_KEY` in `.env` for faster syncs. New intelligence reaches existing findings at the next scan, or immediately with `POST /api/v1/findings/reassess` (per organization).

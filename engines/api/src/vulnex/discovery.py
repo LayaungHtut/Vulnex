@@ -18,6 +18,7 @@ from sqlalchemy import Connection, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql.expression import bindparam
 
+from vulnex import findings
 from vulnex.fingerprint import RULES_VERSION, identify
 from vulnex_worker_protocol.discovery import DiscoveryBatch, DiscoverySummary, TargetReport
 
@@ -270,6 +271,7 @@ def ingest(
         "started_at": summary.started_at,
         "finished_at": summary.finished_at,
     }
+    record["findings"] = findings.evaluate(conn, asset_ids=list(scan["asset_ids"]), scan_id=scan_id)
     conn.execute(
         text("UPDATE app.scan SET summary = :s, ingested_at = now() WHERE id = :id").bindparams(
             bindparam("s", type_=JSONB)

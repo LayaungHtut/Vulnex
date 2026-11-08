@@ -27,9 +27,14 @@ class Permission(StrEnum):
     WORKERS_MANAGE = "workers.manage"
     SCANS_READ = "scans.read"
     SCANS_RUN = "scans.run"
+    FINDINGS_READ = "findings.read"  # every finding in the tenant
+    FINDINGS_WORK = "findings.work"  # comment and report progress on findings assigned to you
+    FINDINGS_TRIAGE = "findings.triage"  # status, assignment, due dates, false positives
+    FINDINGS_ACCEPT = "findings.accept"  # approve risk acceptance (PRD §10)
+    INTEL_READ = "intel.read"
 
 
-_EVERYONE = {Permission.ORGANIZATION_READ}
+_EVERYONE = {Permission.ORGANIZATION_READ, Permission.INTEL_READ}
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
     Role.OWNER: frozenset(Permission),
@@ -45,11 +50,16 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.WORKERS_READ,
             Permission.SCANS_READ,
             Permission.SCANS_RUN,
+            Permission.FINDINGS_READ,
+            Permission.FINDINGS_WORK,
+            Permission.FINDINGS_TRIAGE,
         }
     ),
-    # Remediation contributors will see assigned assets only (M8); nothing tenant-wide yet.
-    Role.REMEDIATION_CONTRIBUTOR: frozenset(_EVERYONE),
-    Role.VIEWER: frozenset(_EVERYONE | {Permission.ASSETS_READ, Permission.SCANS_READ}),
+    # Remediation contributors see and work only the findings assigned to them (PRD §10).
+    Role.REMEDIATION_CONTRIBUTOR: frozenset(_EVERYONE | {Permission.FINDINGS_WORK}),
+    Role.VIEWER: frozenset(
+        _EVERYONE | {Permission.ASSETS_READ, Permission.SCANS_READ, Permission.FINDINGS_READ}
+    ),
 }
 
 

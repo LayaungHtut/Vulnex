@@ -455,6 +455,101 @@ M5_PROBES: dict[tuple[str, str], Callable[[TestClient, Pair], None]] = {
 }
 
 
+def a_finding(client: TestClient, p: Pair) -> str:
+    """Tenant A with one open finding on its M5 service."""
+    d, evidence = a_m5(client, p)
+    engine: Engine = cast(FastAPI, client.app).state.engine
+    with engine.begin() as c:
+        c.execute(text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(p.a.id)})
+        fid = c.execute(
+            text(
+                "INSERT INTO app.finding (tenant_id, asset_id, address, port, check_id, "
+                "check_version, dedupe_key, title, category, severity, severity_score, "
+                "severity_source, confidence, explanation, evidence_ids, risk_score, risk_band, "
+                "risk_model, risk_factors, first_seen_at, last_seen_at) VALUES (:t, :a, "
+                "'10.0.0.1', 22, 'probe.check', 't', 'probe', 'Tenant A secret finding', "
+                "'exposure', 'high', 7.5, 't', 'confirmed', 'x', ARRAY[CAST(:e AS uuid)], 60, "
+                "'high', 't', '{}', now(), now()) RETURNING id"
+            ),
+            {"t": p.a.id, "a": d.asset, "e": evidence},
+        ).scalar_one()
+    return str(fid)
+
+
+def probe_list_findings(client: TestClient, p: Pair) -> None:
+    a_finding(client, p)
+    assert a_get(client, p, "/api/v1/findings")["total"] == 1
+    r = client.get("/api/v1/findings?status=active", headers=bearer(p.token_b))
+    assert r.status_code == 200 and r.json()["total"] == 0 and "secret" not in r.text
+
+
+def probe_findings_summary(client: TestClient, p: Pair) -> None:
+    a_finding(client, p)
+    assert a_get(client, p, "/api/v1/findings/summary")["active"] == 1
+    r = client.get("/api/v1/findings/summary", headers=bearer(p.token_b))
+    assert r.status_code == 200 and r.json()["active"] == 0 and r.json()["top_assets"] == []
+
+
+def probe_findings_export(client: TestClient, p: Pair) -> None:
+    fid = a_finding(client, p)
+    assert fid in client.get("/api/v1/findings/export.csv", headers=bearer(p.token_a)).text
+    r = client.get("/api/v1/findings/export.csv", headers=bearer(p.token_b))
+    assert r.status_code == 200 and fid not in r.text and "secret" not in r.text
+
+
+def probe_get_finding(client: TestClient, p: Pair) -> None:
+    fid = a_finding(client, p)
+    assert client.get(f"/api/v1/findings/{fid}", headers=bearer(p.token_b)).status_code == 404
+
+
+def probe_update_finding(client: TestClient, p: Pair) -> None:
+    fid = a_finding(client, p)
+    body = {"status": "closed_unverified", "reason": "cross-tenant"}
+    r = client.patch(f"/api/v1/findings/{fid}", json=body, headers=bearer(p.token_b))
+    assert r.status_code == 404
+    assert a_get(client, p, f"/api/v1/findings/{fid}")["status"] == "open"
+
+
+def probe_comment_finding(client: TestClient, p: Pair) -> None:
+    fid = a_finding(client, p)
+    r = client.post(
+        f"/api/v1/findings/{fid}/comments", json={"text": "x"}, headers=bearer(p.token_b)
+    )
+    assert r.status_code == 404
+    assert a_get(client, p, f"/api/v1/findings/{fid}")["events"] == []
+
+
+def probe_reassess(client: TestClient, p: Pair) -> None:
+    fid = a_finding(client, p)
+    r = client.post("/api/v1/findings/reassess", headers=bearer(p.token_b))
+    assert r.status_code == 200 and r.json()["new"] == 0
+    assert a_get(client, p, f"/api/v1/findings/{fid}")["status"] == "open"
+
+
+def probe_intel(path: str) -> Callable[[TestClient, Pair], None]:
+    """Intelligence is global reference data: both tenants read the same, nothing tenant-owned."""
+
+    def probe(client: TestClient, p: Pair) -> None:
+        a_finding(client, p)
+        r = client.get(path, headers=bearer(p.token_b))
+        assert r.status_code in (200, 404) and "secret" not in r.text and str(p.a.id) not in r.text
+
+    return probe
+
+
+M7_PROBES: dict[tuple[str, str], Callable[[TestClient, Pair], None]] = {
+    ("GET", "/api/v1/findings"): probe_list_findings,
+    ("GET", "/api/v1/findings/summary"): probe_findings_summary,
+    ("GET", "/api/v1/findings/export.csv"): probe_findings_export,
+    ("GET", "/api/v1/findings/{finding_id}"): probe_get_finding,
+    ("PATCH", "/api/v1/findings/{finding_id}"): probe_update_finding,
+    ("POST", "/api/v1/findings/{finding_id}/comments"): probe_comment_finding,
+    ("POST", "/api/v1/findings/reassess"): probe_reassess,
+    ("GET", "/api/v1/intel/sources"): probe_intel("/api/v1/intel/sources"),
+    ("GET", "/api/v1/intel/cves"): probe_intel("/api/v1/intel/cves"),
+    ("GET", "/api/v1/intel/cves/{cve_id}"): probe_intel("/api/v1/intel/cves/CVE-2024-6387"),
+}
+
 PROBES: dict[tuple[str, str], Callable[[TestClient, Pair], None]] = {
     ("GET", "/api/v1/auth/session"): probe_session,
     ("POST", "/api/v1/auth/logout"): probe_logout,
@@ -467,6 +562,7 @@ PROBES: dict[tuple[str, str], Callable[[TestClient, Pair], None]] = {
     **M3_PROBES,
     **M4_PROBES,
     **M5_PROBES,
+    **M7_PROBES,
 }
 
 

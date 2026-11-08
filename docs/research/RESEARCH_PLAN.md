@@ -35,3 +35,5 @@ Purpose: list what must be researched before major technical or commercial decis
 - Cite primary sources with retrieval dates. Mark vendor claims as claims (see the evidence classes in [RESEARCH_SOURCES.md](RESEARCH_SOURCES.md)).
 - Write results to `docs/research/R<n>-<slug>.md` and update the matching ADR.
 - An unanswered question stays **U (unresolved)**. It is never reported as a "no".
+
+**R3 status, 2026-11-08 (Claude):** feeds integrated technically and reachable (retrieved 2026-11-08): CISA KEV JSON (`cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json`), FIRST EPSS daily CSV (`epss.empiricalsecurity.com/epss_scores-current.csv.gz`, redirected from `epss.cyentia.com`), NVD CVE API 2.0 (`services.nvd.nist.gov/rest/json/cves/2.0`). The console and API show the NVD non-endorsement notice. Terms of use and redistribution rights to self-hosted installs are **NOT VERIFIED**; founder decision and Astra 6 review still required before customer distribution.

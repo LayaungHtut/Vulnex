@@ -3,7 +3,15 @@ import { field, loadOne, mutate } from '#lib/server/actions.js';
 import { requireSession } from '#lib/server/session.js';
 import { redirect } from '@sveltejs/kit';
 import { resolve } from '$app/paths';
-import { CRITICALITIES, can, type Asset, type AuditPage, type Scan } from '#lib/types.js';
+import {
+	CRITICALITIES,
+	can,
+	type Asset,
+	type AuditPage,
+	type FindingPage,
+	type Scan,
+	type ServicePage
+} from '#lib/types.js';
 import type { Actions, PageServerLoad } from './$types';
 
 const base = (id: string) => `/api/v1/assets/${encodeURIComponent(id)}`;
@@ -25,7 +33,21 @@ export const load: PageServerLoad = async (event) => {
 			historyError = e.detail;
 		}
 	}
-	return { asset, history, historyError };
+	const opts = { token: event.locals.token };
+	const id = encodeURIComponent(asset.id);
+	const [services, findings] = await Promise.all([
+		api<ServicePage>(event.fetch, `/api/v1/services?asset_id=${id}&limit=200`, opts).catch(
+			() => null
+		),
+		can(session, 'findings.read')
+			? api<FindingPage>(
+					event.fetch,
+					`/api/v1/findings?asset_id=${id}&status=active&limit=50`,
+					opts
+				).catch(() => null)
+			: null
+	]);
+	return { asset, history, historyError, services, findings };
 };
 
 export const actions: Actions = {
@@ -64,11 +86,13 @@ export const actions: Actions = {
 		),
 
 	scan: async (event) => {
+		const form = await event.request.formData();
+		const profile = field(form, 'profile') === 'scope_check' ? 'scope_check' : 'discovery';
 		const result = await mutate<Scan>(
 			event,
 			'scan',
 			'scans.run',
-			{ path: '/api/v1/scans', method: 'POST', body: { asset_ids: [event.params.id] } },
+			{ path: '/api/v1/scans', method: 'POST', body: { asset_ids: [event.params.id], profile } },
 			(s) => s.id
 		);
 		if ('success' in result) redirect(303, resolve('/(app)/scans/[id]', { id: result.success }));

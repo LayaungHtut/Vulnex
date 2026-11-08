@@ -2,7 +2,9 @@
 	import { enhance } from '$app/forms';
 	import { resolve } from '$app/paths';
 	import Notice from '#lib/components/Notice.svelte';
+	import ConfidenceBadge from '#lib/components/ConfidenceBadge.svelte';
 	import ScopeStatus from '#lib/components/ScopeStatus.svelte';
+	import SeverityBadge from '#lib/components/SeverityBadge.svelte';
 	import { CRITICALITIES, can } from '#lib/types.js';
 	import type { PageProps } from './$types';
 
@@ -105,19 +107,92 @@
 
 {#if can(data.session, 'scans.run') && a.status === 'active' && a.scope.in_scope && a.scope.authorized}
 	<form method="POST" action="?/scan" use:enhance class="mt-4 flex flex-wrap items-center gap-3">
+		<label class="sr-only" for="profile">Scan profile</label>
+		<select id="profile" name="profile" class="rounded border-slate-300 text-sm">
+			<option value="discovery">Discovery: ports, services, TLS, findings</option>
+			<option value="scope_check">Scope check only (no traffic to the target)</option>
+		</select>
 		<button class="rounded bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
-			>Run scope check</button
+			>Run scan</button
 		>
 		<span class="text-sm text-slate-500"
-			>A scanner of "{a.scope_group_name}" checks which addresses it may assess. It sends no traffic
-			to the target.</span
+			>Runs on a scanner of "{a.scope_group_name}", which re-checks the signed scope before every
+			connection. Discovery uses non-intrusive TCP connects and read-only probes.</span
 		>
 	</form>
 {/if}
 
-<p class="mt-4 text-sm text-slate-500">
-	Services and findings appear here once network scanning is available (milestones M5–M7).
-</p>
+{#if data.findings && data.findings.total > 0}
+	<section aria-labelledby="findings" class="mt-8">
+		<div class="flex items-baseline justify-between">
+			<h2 id="findings" class="text-sm font-medium">Active findings ({data.findings.total})</h2>
+			<a href="{resolve('/(app)/findings')}?asset_id={a.id}" class="text-xs underline"
+				>All findings for this asset</a
+			>
+		</div>
+		<ul class="mt-2 divide-y divide-slate-100 rounded-md border border-slate-200 bg-white text-sm">
+			{#each data.findings.items as f (f.id)}
+				<li class="flex flex-wrap items-center gap-3 px-4 py-2">
+					<SeverityBadge level={f.risk_band} score={f.risk_score} />
+					<a
+						href={resolve('/(app)/findings/[id]', { id: f.id })}
+						class="min-w-0 flex-1 hover:underline">{f.title}</a
+					>
+					<span class="font-mono text-xs text-slate-500"
+						>{f.address}{f.port ? `:${f.port}` : ''}</span
+					>
+					<ConfidenceBadge confidence={f.confidence} />
+				</li>
+			{/each}
+		</ul>
+	</section>
+{/if}
+
+<section aria-labelledby="services" class="mt-8">
+	<h2 id="services" class="text-sm font-medium">Services</h2>
+	{#if !data.services}
+		<p class="mt-2 text-sm text-slate-500">Services could not be loaded.</p>
+	{:else if data.services.total === 0}
+		<p class="mt-2 text-sm text-slate-500">
+			No open services recorded. Run a discovery scan to find them.
+		</p>
+	{:else}
+		<div class="mt-2 overflow-x-auto rounded-md border border-slate-200 bg-white">
+			<table class="w-full text-left text-sm">
+				<thead class="border-b border-slate-200 text-xs text-slate-500">
+					<tr>
+						<th scope="col" class="px-4 py-2 font-medium">Address</th>
+						<th scope="col" class="px-4 py-2 font-medium">Port</th>
+						<th scope="col" class="px-4 py-2 font-medium">Service</th>
+						<th scope="col" class="px-4 py-2 font-medium">Product</th>
+						<th scope="col" class="px-4 py-2 font-medium">Identified by</th>
+						<th scope="col" class="px-4 py-2 font-medium">Last seen</th>
+					</tr>
+				</thead>
+				<tbody class="divide-y divide-slate-100">
+					{#each data.services.items as svc (svc.id)}
+						<tr>
+							<td class="px-4 py-2 font-mono text-xs">{svc.address}</td>
+							<td class="px-4 py-2 font-mono text-xs"
+								>{svc.port}/{svc.transport}{svc.tls ? ' · TLS' : ''}</td
+							>
+							<td class="px-4 py-2">{svc.name ?? 'unknown'}</td>
+							<td class="px-4 py-2"
+								>{[svc.product, svc.version].filter(Boolean).join(' ') || '—'}</td
+							>
+							<td
+								class="px-4 py-2 text-xs text-slate-500"
+								title="Port-number guesses are the weakest evidence"
+								>{svc.fingerprint_method ?? '—'}</td
+							>
+							<td class="px-4 py-2 text-xs text-slate-600">{when(svc.last_seen_at)}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	{/if}
+</section>
 
 {#if manage}
 	<section aria-labelledby="edit" class="mt-8 rounded-md border border-slate-200 bg-white p-4">

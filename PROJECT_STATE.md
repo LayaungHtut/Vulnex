@@ -1,12 +1,37 @@
 # VULNEX Project State
 
-Last updated: 2026-11-08 by Claude · Branch: `feature/m4-scanner` (from `8d6912a`) · **M4 increments 2–3 are committed locally in the commit that contains this file** (after `9d56e7f`, increment 1; see `git log`). Nothing is pushed (there is no remote).
+Last updated: 2026-11-08 (night) by Claude · Branch: `feature/m6-m8-findings` (from `feature/m5-discovery`, `e379d3e`) · M5 is committed (`e379d3e`); **M6–M8 are committed locally in the commit that contains this file**. Nothing is pushed (there is no remote).
 
 ## Current phase
 
-**M4 (scanner foundation) is IMPLEMENTED and TESTED locally, and committed locally.** Increment 1 (job queue) is committed (`9d56e7f`). Increments 2 and 3 (worker identity, signed scope, scanner, console) are implemented under founder option (b) for ADR-0006 (founder, 2026-11-08: "just do whatever to make my project perfect just like Nessus", taken as approval of my recommendation (b): build the worker trust design now, Astra 6 reviews it before any scan touches a real network). ADR-0003 and ADR-0006 remain **PROPOSED**. M3 (`8d6912a`), M2 (`07a51dc`) and M1 (`66a3fdb`) are committed.
+The founder asked (2026-11-08, before sleeping) for an autonomous build toward the full product. Done overnight, all **local only**: M5 network discovery (lab targets only), M6 vulnerability intelligence, M7 findings and risk, M8 dashboard and remediation workflow. Commits were made on feature branches without asking first (the founder was asleep and asked for full autonomy); they are local, reversible and unpushed, and are listed in the report for approval. **Astra 6 has still not reviewed ADR-0006**: every scan so far targeted only the Compose `lab` network (172.30.77.0/24, internal, founder-owned containers). ADR-0001/2/3/5/6 remain PROPOSED; the risk model `risk-v0.1` is PROPOSED (no ADR yet).
 
-## Current milestone: M4 scanner foundation: **IMPLEMENTED, TESTED locally; committed locally; CI NOT RUN**
+## M6–M8 intelligence, findings, risk, console: **IMPLEMENTED, TESTED locally (2026-11-08); committed locally; CI NOT RUN**
+
+### What they deliver (verified 2026-11-08)
+
+- **Intelligence (M6):** migration `0007` schema `intel` (application role `SELECT` only). `python -m vulnex.cli intel-sync` (owner role) fetched the live feeds on 2026-11-08: **CISA KEV 1,769 entries (catalog 2026.11.06), FIRST EPSS 401,956 scores (2026-11-08, model v2026.06.15), NVD 3,722 CVEs for 20/20 fingerprinted products** (OpenSSH, Apache httpd, nginx, MySQL, MariaDB, PHP, OpenSSL, Tomcat, Redis, …). Failure keeps the last good data and is shown as an error/stale state (PRD INT-04/05). The first NVD run failed (read timeout on a 2,000-record page) and discarded everything; fixed with 500-record pages, timeout retries and one transaction per product, plus a regression test.
+- **Checks and findings (M7):** 14 deterministic checks (`checks-2026.11.1`), evaluated in the scan-ingest transaction; one finding per service and check. Confidence per PRD A1: confirmed only when the condition was observed; any CVE match from a version is POTENTIAL.
+- **Risk (M7):** `risk-v0.1` = 5×CVSS + 20 (KEV) + exposure (0 private, provisional 15 public) + criticality (0/5/10/15), with per-factor explanation. EPSS displayed, not scored.
+- **Workflow (M8):** statuses per PRD §13/A3; resolution only by a verifying scan; reopen on redetection; risk acceptance owner/admin only with reason and expiry; remediation contributors see only assigned findings; append-only history; audit events for every change.
+- **Console (M8):** Overview with real metrics, Findings list/detail, Intelligence, discovery scans from assets, services and findings on assets, discovery results on scans.
+
+Live lab result (2026-11-08 16:52 UTC, discovery of 172.30.77.0/28): 14 hosts probed, 5 responding, 5 open ports, **5 findings**: OpenSSH 10.0 with 25 NVD CVEs by version (POTENTIAL; the lab image is an Alpine package build that may carry backports), Redis without authentication (CONFIRMED), Redis 7.4.12 with 3 CVEs by version (POTENTIAL), expired and self-signed TLS certificate on 172.30.77.11:443 (CONFIRMED). Console pages rendered and inspected in a browser (screenshots).
+
+### Known limitations (M6–M8)
+
+- Intelligence licensing/redistribution (research R3) is **NOT VERIFIED**; the NVD notice is displayed. Founder decision needed before any customer distribution.
+- NVD data covers only the products the fingerprint rules can name; CVEs for unidentified software are not correlated. No vendor or distribution advisories yet (needed to turn POTENTIAL into PROBABLE/NOT_AFFECTED; M2 authenticated inventory per D3).
+- Intelligence updates reach existing findings at the next scan or via "reassess" (per tenant); the sync job cannot enumerate tenants under FORCE RLS, so it does not reassess automatically.
+- Exposure is provisional for public addresses (reachability not verified). Check scores for configuration findings are VULNEX's own documented values.
+- No report generation beyond CSV export; no notifications; no SLA policy engine (due dates are manual).
+- Scope-check scans still exist; the API default profile is `scope_check` for compatibility, the console defaults to discovery.
+
+## M5 network discovery: **IMPLEMENTED, TESTED locally (2026-11-08); committed `e379d3e`; CI NOT RUN**
+
+Scanner connector validating every destination before each connection, TCP/banner/TLS/HTTP and read-only Redis/memcached probes, evidence and service inventory (migration `0006`), fingerprint rules `fp-2026.11.1`, Compose `lab` profile (nginx, nginx TLS with an expired self-signed certificate, OpenSSH, Redis). Live lab scan: ~26 s, scanner refused its own address. The Docker gateway 172.30.77.1 (rpcbind) answers inside the lab range; exclude `172.30.77.1/32` in lab scope groups.
+
+## M4 scanner foundation (was: current milestone): **IMPLEMENTED, TESTED locally; committed locally; CI NOT RUN**
 
 | Increment                       | Content                                                                                                                                                                                              | Status                                                                   |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
@@ -161,10 +186,10 @@ Standing founder constraint: **no additional infrastructure without a demonstrat
 
 ## Pending (next, in order)
 
-1. Founder: inspect ADR-0001 and rule on D1, D4, D7; set the security contact in `SECURITY.md`.
-2. Founder: create the private GitHub repository (D8) so CI, gitleaks and Dependabot actually run.
-3. Astra 6 reviews the architecture package plus the M1–M4 addenda ([AGENT_HANDOFF.md](AGENT_HANDOFF.md)).
-4. Research P0 items R1, R3, R4, R10.
+1. Founder: review and approve (or reject) the overnight local commits (M5 `e379d3e`, M6–M8) before they merge to `develop`.
+2. Astra 6 reviews ADR-0006 and the M4/M5 implementation **before any scan of a non-lab network**; also ADR-0001/2/3/5 and the risk model.
+3. Founder: R3 intelligence licensing decision; create the private GitHub repository (D8); rule on D1, D4, D7; set the `SECURITY.md` contact.
+4. Claude: ADR for the risk model and the check/finding engine; distribution advisories (Debian/Ubuntu/Alpine security trackers) to refine POTENTIAL findings; report generation (PDF/HTML); notifications.
 
 ## Known bugs
 
@@ -183,24 +208,22 @@ None open. Found and fixed during M3 verification: (a) the add-asset form defaul
 
 None known in code. Design-level accepted risks needing founder acknowledgment: [THREAT_MODEL.md §5](docs/security/THREAT_MODEL.md), plus the M2 trade-offs listed under "Known limitations" above (e-mail lockout window, unauthenticated `/readyz` version).
 
-## Actual test results (2026-11-08, Windows dev machine, `feature/m4-scanner`, M4 increments 2–3, before commit)
+## Actual test results (2026-11-08 night, Windows dev machine, `feature/m6-m8-findings`, before commit)
 
-| Command                                                                                  | Result                                                                                                                                                                     |
-| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sh scripts/check-api.sh` (Linux container, PostgreSQL 17 from Compose)                  | ruff PASS, ruff format PASS, mypy `--strict` PASS (48 files), **pytest 257 passed**, 0 skipped (increment 1: 194)                                                          |
-| Mutation checks                                                                          | scans without the authorization gate; worker API without the lease-time re-check; endpoint certificate without AKI: the targeted test **failed** each time; files restored |
-| `npm run lint`                                                                           | PASS                                                                                                                                                                       |
-| `npm run check`                                                                          | PASS, 0 errors, 0 warnings                                                                                                                                                 |
-| `npx vitest run`                                                                         | 24 passed                                                                                                                                                                  |
-| `npx playwright test`                                                                    | 2 passed                                                                                                                                                                   |
-| Compose: migration `0004 → 0005` on the dev volume, `/readyz`                            | PASS                                                                                                                                                                       |
-| Compose real-network run (mTLS through Caddy, scanner container) and console walkthrough | PASS, details under M4 above                                                                                                                                               |
-| Queue load test (10,000 jobs, 4 claimers)                                                | NOT RUN                                                                                                                                                                    |
-| Host `uv run pytest` / `uv run mypy`                                                     | **BLOCKED** by Windows Smart App Control (environment, not code); same checks pass in the container                                                                        |
-| GitHub Actions                                                                           | NOT RUN (no remote)                                                                                                                                                        |
+| Command                                                                                      | Result                                                                                                                |
+| -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `sh scripts/check-api.sh` (Linux container, PostgreSQL 17)                                   | ruff PASS, ruff format PASS, mypy `--strict` PASS (65 files), **pytest 346 passed**, 1 skipped (the opt-in load test) |
+| Queue load test (`VULNEX_LOAD_TEST=1`, 10,000 jobs, 4 claimers)                              | PASS, 1 passed in 28.0 s (asserts: all 10,000 succeeded, max attempt 1, no duplicate finals, no quarantine)           |
+| `npm run lint`                                                                               | PASS                                                                                                                  |
+| `npm run check`                                                                              | PASS, 0 errors, 0 warnings                                                                                            |
+| `npx vitest run`                                                                             | 24 passed                                                                                                             |
+| `npx playwright test`                                                                        | NOT RUN this session                                                                                                  |
+| Compose: migration `0006 → 0007` on the dev volume; live intel sync; live lab discovery scan | PASS (numbers above)                                                                                                  |
+| Console against the dev stack (10 pages and the CSV export, then screenshots)                | PASS; found and fixed a CSV bug (empty cells exported as `'`) with a regression test                                  |
+| GitHub Actions                                                                               | NOT RUN (no remote)                                                                                                   |
 
 ## Next recommended task
 
-1. **Astra 6:** review ADR-0006 and its M4 implementation notes (deviations listed there) **before M5**, the first milestone that sends packets to real systems. Also open: ADR-0001/2/3/5 and the M1–M4 addenda in [AGENT_HANDOFF.md](AGENT_HANDOFF.md).
-2. **Founder:** create the private GitHub repository (D8) so CI, gitleaks and Dependabot run; set the `SECURITY.md` contact; rule on D1, D4, D7.
-3. **Claude, next:** the queue load test; then M5 planning (DNS resolution and per-address checks at connect time, TCP port checks, service identification, TLS metadata, evidence storage) with the destination fixtures from ADR-0006 as the first tests. Nmap stays out until research R1 (licensing) is done.
+1. **Founder:** review the overnight commits and the open decisions above.
+2. **Astra 6:** ADR-0006 review before any non-lab scanning.
+3. **Claude, next:** risk/finding ADR; distribution security advisories; reports; Playwright journeys for findings.

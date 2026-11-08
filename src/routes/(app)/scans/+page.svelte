@@ -15,8 +15,9 @@
 <h1 class="text-xl font-semibold tracking-tight">Scans</h1>
 <p class="mt-1 max-w-3xl text-sm text-slate-600">
 	Scans run on your scanners, inside an authorized scope group, and each scanner re-checks the scope
-	itself before acting. The current scan profile, <em>scope check</em>, reports which addresses a
-	scanner may assess without sending any traffic to them. Start one from an asset.
+	itself before acting. <em>Scope check</em> reports which addresses a scanner may assess without
+	sending any traffic to them. <em>Discovery</em> connects to common TCP ports, identifies services with
+	read-only probes, records the evidence and evaluates checks. Start a scan from an asset.
 </p>
 
 {#if data.loadError}
@@ -25,7 +26,7 @@
 	<p
 		class="mt-6 rounded-md border border-dashed border-slate-300 bg-white px-4 py-6 text-sm text-slate-600"
 	>
-		No scans yet. Open an asset in an authorized scope group and choose “Run scope check”. A scanner
+		No scans yet. Open an asset in an authorized scope group and choose “Run scan”. A scanner
 		enrolled for that scope group must be running to pick it up.
 	</p>
 {:else}
@@ -34,6 +35,7 @@
 			<thead class="border-b border-slate-200 text-xs text-slate-500">
 				<tr>
 					<th scope="col" class="px-4 py-2 font-medium">Requested</th>
+					<th scope="col" class="px-4 py-2 font-medium">Profile</th>
 					<th scope="col" class="px-4 py-2 font-medium">Targets</th>
 					<th scope="col" class="px-4 py-2 font-medium">Scope group</th>
 					<th scope="col" class="px-4 py-2 font-medium">State</th>
@@ -48,6 +50,9 @@
 								>{when(s.created_at)}</a
 							>
 						</td>
+						<td class="px-4 py-2.5 text-xs"
+							>{s.profile === 'discovery' ? 'Discovery' : 'Scope check'}</td
+						>
 						<td class="px-4 py-2.5 font-mono text-xs">
 							{s.targets.slice(0, 3).join(', ')}{s.targets.length > 3
 								? ` +${s.targets.length - 3}`

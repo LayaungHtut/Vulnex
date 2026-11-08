@@ -7,16 +7,24 @@
 	let { data, children }: LayoutProps = $props();
 
 	// Only implemented sections appear; each is hidden when the role cannot use it.
-	const nav: { href: string; label: string; permission?: Permission }[] = [
+	const nav: { href: string; label: string; permission?: Permission | Permission[] }[] = [
 		{ href: resolve(''), label: 'Overview' },
+		{
+			href: resolve('findings'),
+			label: 'Findings',
+			permission: ['findings.read', 'findings.work']
+		},
 		{ href: resolve('assets'), label: 'Assets', permission: 'assets.read' },
 		{ href: resolve('scans'), label: 'Scans', permission: 'scans.read' },
+		{ href: resolve('intelligence'), label: 'Intelligence', permission: 'intel.read' },
 		{ href: resolve('scope'), label: 'Authorized scope', permission: 'scope.read' },
 		{ href: resolve('workers'), label: 'Scanners', permission: 'workers.read' },
 		{ href: resolve('members'), label: 'Members', permission: 'members.read' },
 		{ href: resolve('audit'), label: 'Audit log', permission: 'audit.read' }
 	];
-	const visible = $derived(nav.filter((n) => !n.permission || can(data.session, n.permission)));
+	const visible = $derived(
+		nav.filter((n) => !n.permission || [n.permission].flat().some((p) => can(data.session, p)))
+	);
 	const current = (href: string) =>
 		href === resolve('') ? page.url.pathname === href : page.url.pathname.startsWith(href);
 </script>
@@ -43,9 +51,6 @@
 					</li>
 				{/each}
 			</ul>
-			<p class="mt-6 px-3 text-xs leading-relaxed text-slate-400">
-				Network scanning and findings arrive in later milestones (M5–M8).
-			</p>
 		</nav>
 	</aside>
 

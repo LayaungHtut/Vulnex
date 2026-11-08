@@ -157,3 +157,18 @@ Please also challenge the following:
 | Revocation          | `workers.py` (`revoke_worker`), migration `0005` (`release_worker_leases`)                                                                      | Held jobs are requeued, not cancelled (deviation 2). Late submissions are quarantined. The scanner deletes its key on 401 `revoked`.                                                                                                                                                                                                                          |
 | Key handling        | `pki.py`, `compose.yaml` (`init-pki`)                                                                                                           | Keys live in a named Docker volume owned by the API image's user; the user-facing API mounts only the public endpoint CA. Fine for self-hosted v0; an HSM or KMS is a later decision.                                                                                                                                                                         |
 | Tests               | `test_workers_scans.py`, `test_worker_api.py`, `test_scanner_agent.py`, `engines/scanner/tests`, `packages/worker-protocol/tests`, route matrix | 63 new tests (257 total). Three mutation checks. The destination fixtures of ADR-0006 "Tests" wait for M5.                                                                                                                                                                                                                                                    |
+
+## 13. Addendum 2026-11-08 (night): M5–M8 discovery, intelligence, findings, risk (for review)
+
+Built autonomously while the founder slept; committed locally on `feature/m5-discovery` (`e379d3e`) and `feature/m6-m8-findings`; nothing pushed.
+
+Please challenge:
+
+1. **Scanner destination checks (M5, ADR-0006):** `engines/scanner/src/vulnex_scanner/connector.py` validates every connection immediately before connecting (lease, ceiling, own/control-plane addresses, never-allowed ranges, hostname answers, IPv6 refused). Only the connector opens sockets (test-enforced). Is anything reachable that should not be (redirects are recorded, never followed)?
+2. **Confidence rules (PRD A1, D3):** `engines/api/src/vulnex/checks.py`. Version matches are always POTENTIAL; "every version" and platform-conditional NVD matches are not reported. Are any CONFIRMED classifications not justified by direct observation?
+3. **Verification semantics (PRD §13):** `findings.evaluate`. Only "same check ran on the same service and reported absent" resolves; closed ports and interrupted scans never resolve. Edge cases missed?
+4. **Risk model `risk-v0.1`** (`engines/api/src/vulnex/risk.py`): PRD §15 formula; needs an ADR. Provisional values for unknown exposure/criticality.
+5. **Intel isolation:** `intel` schema is global, application role `SELECT` only; writes only via the owner role CLI. Tenant data never enters `intel`.
+6. **Remediation permissions:** contributors see only assigned findings (`_scope`), cannot triage or close; risk acceptance owner/admin only.
+
+Tests: `engines/api/tests/test_findings.py` (18), `test_discovery.py`, `test_fingerprint.py`, `engines/scanner/tests/test_discover.py`, route matrix (`test_tenant_isolation.py`, 10 new probes). Results in `PROJECT_STATE.md`.
