@@ -1,9 +1,11 @@
-"""Scan runs (M4): request, list, inspect and cancel. Execution is a `queue.job` (ADR-0003)
-leased by a worker of the same scope group, which re-checks scope itself (ADR-0006 §4).
+"""Scan runs (M4/M5): request, list, inspect and cancel. Execution is a `queue.job` (ADR-0003)
+leased by a worker of the same scope group, which re-checks scope itself (ADR-0006 §4-5).
 
-M4 has one profile, `scope_check`: the worker expands each target against the signed scope and
-reports which addresses it would be allowed to touch. It sends no packets to targets. Network
-probing arrives in M5, after the Astra 6 review of ADR-0006.
+Profiles:
+- `scope_check` (M4): the worker expands each target against the signed scope and reports which
+  addresses it would be allowed to touch. No packets reach targets.
+- `discovery` (M5): non-intrusive TCP service discovery on the listed ports (TCP connect, the
+  service's own greeting, a TLS handshake, one `GET /`). Results become evidence and services.
 """
 
 import uuid
@@ -18,6 +20,7 @@ from vulnex import audit
 from vulnex.authz import Permission, Principal
 from vulnex.db import tenant_tx
 from vulnex.deps import client_ip, engine_of, require
+from vulnex.discovery import DEFAULT_PORTS
 from vulnex.scope import entries_by_group, group_row, is_authorized
 from vulnex_worker_protocol.targets import Kind, Target, scope_problem
 
@@ -26,7 +29,10 @@ router = APIRouter(prefix="/api/v1/scans", tags=["scans"])
 Reader = Annotated[Principal, Depends(require(Permission.SCANS_READ))]
 Runner = Annotated[Principal, Depends(require(Permission.SCANS_RUN))]
 
-TASK_KIND = "scope.check"
+TASK_KINDS = {"scope_check": "scope.check", "discovery": "network.discover"}
+Profile = Literal["scope_check", "discovery"]
+MAX_PROBES = 262_144  # addresses x ports per scan; larger estates need several scans
+_HOSTNAME_ADDRESSES = 4  # estimate for the probe budget; the worker caps real answers
 # Users see scan states; queue vocabulary ("leased", "dead") stays internal.
 _STATE = {
     "queued": "queued",
@@ -41,15 +47,22 @@ ScanState = Literal["queued", "running", "completed", "failed", "cancelled"]
 
 class ScanIn(BaseModel):
     asset_ids: list[uuid.UUID] = Field(min_length=1, max_length=1000)
+    profile: Profile = "scope_check"
+    ports: list[Annotated[int, Field(ge=1, le=65535)]] | None = Field(
+        default=None,
+        max_length=1024,
+        description="TCP ports for `discovery`; omitted means the default list",
+    )
 
 
 class ScanOut(BaseModel):
     id: uuid.UUID
     scope_group_id: uuid.UUID
     scope_group_name: str
-    profile: Literal["scope_check"]
+    profile: Profile
     asset_ids: list[uuid.UUID]
     targets: list[str]
+    ports: list[int]
     requested_by_email: str | None
     created_at: datetime
     state: ScanState
@@ -58,6 +71,9 @@ class ScanOut(BaseModel):
     last_error: str | None
     cancel_requested: bool
     finished_at: datetime | None
+    summary: dict[str, Any] | None = Field(
+        default=None, description="Ingest summary of a discovery scan (counts per asset)"
+    )
     result: dict[str, Any] | None = Field(
         default=None, description="The worker's final report (detail view only)"
     )
@@ -116,6 +132,8 @@ def _scans(
                 profile=r["profile"],
                 asset_ids=r["asset_ids"],
                 targets=r["targets"],
+                ports=r["ports"],
+                summary=r["summary"],
                 requested_by_email=emails.get(r["requested_by"]),
                 created_at=r["created_at"],
                 state=_STATE[job["state"]],
@@ -200,10 +218,20 @@ def create_scan(
                 "administrator must authorize it first",
             )
         targets = [str(a["target"]) for a in assets]
+        budget = 0
         for a in assets:
-            problem = scope_problem(Target(Kind(a["kind"]), str(a["target"])), entries)
+            target = Target(Kind(a["kind"]), str(a["target"]))
+            problem = scope_problem(target, entries)
             if problem:
                 raise HTTPException(status.HTTP_409_CONFLICT, f"{a['target']}: {problem}")
+            budget += target.network.num_addresses if target.network else _HOSTNAME_ADDRESSES
+        ports = sorted(set(body.ports or DEFAULT_PORTS)) if body.profile == "discovery" else []
+        if budget * max(len(ports), 1) > MAX_PROBES:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"This scan would make about {budget * len(ports):,} probes; the limit is "
+                f"{MAX_PROBES:,}. Scan fewer assets or ports at a time.",
+            )
 
         job = conn.execute(
             text(
@@ -212,20 +240,26 @@ def create_scan(
             ),
             {
                 "g": group_id,
-                "kind": TASK_KIND,
-                "payload": ScanPayload(asset_ids=asset_ids, targets=targets).model_dump_json(),
+                "kind": TASK_KINDS[body.profile],
+                "payload": ScanPayload(
+                    profile=body.profile, asset_ids=asset_ids, targets=targets, ports=ports
+                ).model_dump_json(),
                 "key": f"scan:{idempotency_key}" if idempotency_key else None,
             },
         ).one()
         if not job.created:
             existing = conn.execute(
                 text(
-                    "SELECT id, asset_ids FROM app.scan "
+                    "SELECT id, asset_ids, profile, ports FROM app.scan "
                     "WHERE tenant_id = app.current_tenant() AND job_id = :j"
                 ),
                 {"j": job.job_id},
             ).one()
-            if sorted(existing.asset_ids) != asset_ids:
+            if (sorted(existing.asset_ids), existing.profile, list(existing.ports)) != (
+                asset_ids,
+                body.profile,
+                ports,
+            ):
                 raise HTTPException(
                     status.HTTP_409_CONFLICT, "Idempotency-Key was already used for another scan"
                 )
@@ -235,10 +269,18 @@ def create_scan(
         scan_id = conn.execute(
             text(
                 "INSERT INTO app.scan (tenant_id, scope_group_id, profile, asset_ids, targets, "
-                "job_id, requested_by) VALUES (app.current_tenant(), :g, 'scope_check', :a, "
-                ":t, :j, :by) RETURNING id"
+                "ports, job_id, requested_by) VALUES (app.current_tenant(), :g, :profile, :a, "
+                ":t, :ports, :j, :by) RETURNING id"
             ),
-            {"g": group_id, "a": asset_ids, "t": targets, "j": job.job_id, "by": principal.user_id},
+            {
+                "g": group_id,
+                "profile": body.profile,
+                "a": asset_ids,
+                "t": targets,
+                "ports": ports,
+                "j": job.job_id,
+                "by": principal.user_id,
+            },
         ).scalar_one()
         audit.record(
             conn,
@@ -247,7 +289,12 @@ def create_scan(
             target_type="scan",
             target_id=str(scan_id),
             ip=client_ip(request),
-            detail={"scope_group_id": str(group_id), "assets": len(asset_ids)},
+            detail={
+                "scope_group_id": str(group_id),
+                "assets": len(asset_ids),
+                "profile": body.profile,
+                "ports": len(ports),
+            },
         )
         return _one(conn, scan_id)
 
@@ -287,6 +334,7 @@ def cancel_scan(scan_id: uuid.UUID, request: Request, principal: Runner) -> Scan
 class ScanPayload(BaseModel):
     """The job payload the worker API turns into a signed scope lease."""
 
-    profile: Literal["scope_check"] = "scope_check"
+    profile: Profile = "scope_check"
     asset_ids: list[uuid.UUID]
     targets: list[str]
+    ports: list[int] = Field(default_factory=list)

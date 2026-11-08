@@ -28,9 +28,13 @@ from cryptography.x509.oid import NameOID
 
 from vulnex_scanner import __version__
 from vulnex_scanner.check import scope_check
+from vulnex_scanner.connector import Connector, local_addresses
+from vulnex_scanner.discover import discover
+from vulnex_worker_protocol import discovery
 from vulnex_worker_protocol.lease import (
     MAX_CLOCK_SKEW,
     LeaseError,
+    ScopeLease,
     SignedLease,
     load_public_key,
     verify,
@@ -39,6 +43,7 @@ from vulnex_worker_protocol.messages import (
     Credentials,
     EnrollmentBundle,
     EnrollRequest,
+    ExtendResponse,
     HeartbeatResponse,
     LeaseResponse,
     Task,
@@ -50,6 +55,7 @@ log = logging.getLogger("vulnex.scanner")
 KEY, CERT, CA, CONFIG = "worker.key", "worker.crt", "endpoint-ca.crt", "worker.json"
 RENEW_BEFORE = timedelta(days=2)
 POLL_EVERY_S = 5.0
+EXTEND_EVERY_S = 10.0  # well inside the queue lease TTL; also how fast a cancel arrives
 
 
 class ScannerError(Exception):
@@ -223,12 +229,75 @@ class Agent:
         else:
             if lease.kind == "scope.check":
                 result = scope_check(lease, self.ceiling), "succeeded", None
+            elif lease.kind == discovery.TASK_KIND:
+                found = self._discover(lease, base)
+                if found is None:
+                    return {}
+                result = found
             else:
                 result = {}, "refused", f"this worker does not run {lease.kind!r} tasks"
         payload, outcome, error = result
-        body = base | {"seq": 0, "payload": payload, "outcome": outcome, "error": error}
+        body = {"seq": 0} | base | {"payload": payload, "outcome": outcome, "error": error}
         self._post("/worker/v1/tasks/submit", body)
         return body
+
+    def _discover(
+        self, lease: ScopeLease, base: dict[str, Any]
+    ) -> tuple[dict[str, Any], str, str | None] | None:
+        """Run `network.discover`, keeping the lease alive and streaming batches. Returns the
+        final (payload, outcome, error), or None when the lease was lost (nothing to submit)."""
+        host = httpx.URL(self.config["control_plane_url"]).host or None
+        conn = Connector(lease, ceiling=self.ceiling, deny=local_addresses(host))
+        done = threading.Event()
+
+        def keep_alive() -> None:
+            while not done.wait(EXTEND_EVERY_S):
+                try:
+                    r = ExtendResponse.model_validate(
+                        self._post(
+                            "/worker/v1/tasks/extend",
+                            {"job_id": base["job_id"], "lease_id": base["lease_id"]},
+                        )
+                    )
+                except (ScannerError, httpx.HTTPError) as e:
+                    log.warning("lease extension failed: %s", e)
+                    continue
+                if not r.ok:
+                    conn.stop_reason = "lease lost"
+                    conn.stop.set()
+                elif r.cancel_requested:
+                    conn.stop_reason = "cancelled"
+                    conn.stop.set()
+
+        seq = 0
+
+        def submit(reports: list[discovery.TargetReport]) -> None:
+            nonlocal seq
+            seq += 1
+            batch = discovery.DiscoveryBatch(reports=reports).model_dump(mode="json")
+            self._post("/worker/v1/tasks/submit", base | {"seq": seq, "payload": batch})
+
+        thread = threading.Thread(target=keep_alive, name="extend", daemon=True)
+        thread.start()
+        try:
+            summary = discover(lease, conn, self.ceiling, submit)
+        except ScannerError as e:
+            conn.stop.set()
+            if conn.stop_reason == "lease lost":
+                log.warning("lease lost during discovery; abandoning the task")
+                return None
+            return {"error": str(e)[:300]}, "failed", f"worker error: {e}"[:1000]
+        finally:
+            done.set()
+            thread.join(timeout=EXTEND_EVERY_S + 5)
+            base["seq"] = seq + 1  # the final submission follows the batches
+        if conn.stop_reason == "lease lost":
+            log.warning("lease lost during discovery; abandoning the task")
+            return None
+        payload = discovery.DiscoverySummary(**summary).model_dump(mode="json")
+        if conn.stop_reason == "cancelled":
+            return payload, "cancelled", "cancelled by a user"
+        return payload, "succeeded", None
 
     def run_once(self) -> int:
         """Heartbeat, renew if due, lease and run tasks. Returns the number of tasks handled."""

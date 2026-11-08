@@ -25,10 +25,11 @@ from typing import Annotated
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
+from pydantic import ValidationError
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
-from vulnex import __version__, logs, security
+from vulnex import __version__, discovery, logs, security
 from vulnex.audit import record_worker
 from vulnex.db import make_engine
 from vulnex.deps import engine_of
@@ -74,8 +75,15 @@ CERT_HEADER = "X-Vulnex-Client-Cert-Sha256"
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}")
 LEASE_TTL = timedelta(minutes=5)  # the queue caps leases at 5 minutes
 SWEEP_EVERY_S = 10.0
-# M4 tasks only expand targets against scope; these bound that work on the worker.
-LIMITS = Limits(max_addresses=4096, task_timeout_s=300, probe_timeout_s=2.0, max_concurrency=16)
+# Bounds the worker enforces per task kind (ADR-0006 §5.8).
+LIMITS = {
+    "scope.check": Limits(
+        max_addresses=4096, task_timeout_s=300, probe_timeout_s=2.0, max_concurrency=16
+    ),
+    "network.discover": Limits(
+        max_addresses=4096, task_timeout_s=3600, probe_timeout_s=2.0, max_concurrency=32
+    ),
+}
 
 router = APIRouter(prefix="/worker/v1", tags=["worker"])
 
@@ -300,8 +308,9 @@ def lease(body: LeaseRequest, request: Request, worker: CurrentWorker) -> LeaseR
                 worker_id=worker.id,
                 scope_group_id=worker.scope_group_id,
                 not_before=datetime.now(UTC),
-                # shortcut: the signed window is the first lease period; extending the queue
-                # lease does not re-sign. Fine for M4 tasks (seconds); re-sign on extend in M5.
+                # The signature window bounds when the worker may *start* the task. Once
+                # started, the worker stops at not_before + task_timeout_s, or earlier when an
+                # extension reports the lease lost or a cancel (ADR-0006 §6).
                 expires_at=job["lease_expires_at"],
                 kind=str(job["kind"]),
                 targets=payload.targets,
@@ -310,7 +319,8 @@ def lease(body: LeaseRequest, request: Request, worker: CurrentWorker) -> LeaseR
                     for e in entries
                 ],
                 scope_digest=scope_digest(entries),
-                limits=LIMITS,
+                ports=payload.ports,
+                limits=LIMITS.get(str(job["kind"]), LIMITS["scope.check"]),
             )
             tasks.append(
                 Task(
@@ -350,6 +360,14 @@ def submit(body: Submission, request: Request, worker: CurrentWorker) -> Submiss
         "p": json.dumps(body.payload),
     }
     with worker_tx(engine_of(request), worker.tenant_id) as conn:
+        kind = conn.execute(text("SELECT queue.job_kind(:j)"), {"j": body.job_id}).scalar()
+        try:
+            discovery.validate(str(kind), body.payload, body.outcome is not None, body.outcome)
+        except ValidationError as e:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"malformed {kind} result: {e.error_count()} problem(s)",
+            ) from None
         if body.outcome is None:
             result = conn.execute(
                 text("SELECT queue.submit_result(:j, :l, :w, :a, :s, CAST(:p AS jsonb))"), args
@@ -359,6 +377,10 @@ def submit(body: Submission, request: Request, worker: CurrentWorker) -> Submiss
                 text("SELECT queue.complete(:j, :l, :w, :a, :s, CAST(:p AS jsonb), :o, :e)"),
                 args | {"o": body.outcome, "e": body.error},
             ).scalar_one()
+            if result == "accepted" and body.outcome in ("succeeded", "cancelled"):
+                discovery.ingest(
+                    conn, job_id=body.job_id, attempt=body.attempt, worker_id=worker.id
+                )
     if result == "stale":
         raise HTTPException(status.HTTP_409_CONFLICT, "stale lease")
     return SubmissionResponse(status=result)

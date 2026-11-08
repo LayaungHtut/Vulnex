@@ -402,6 +402,59 @@ M4_PROBES: dict[tuple[str, str], Callable[[TestClient, Pair], None]] = {
 }
 
 
+def a_m5(client: TestClient, p: Pair) -> tuple[M4Data, str]:
+    """Tenant A with one evidence row and one service (as a completed discovery would leave)."""
+    d = a_m4(client, p)
+    engine: Engine = cast(FastAPI, client.app).state.engine
+    with engine.begin() as c:
+        c.execute(text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(p.a.id)})
+        evidence = c.execute(
+            text(
+                "INSERT INTO app.evidence (tenant_id, scan_id, asset_id, kind, address, port, "
+                "data, observed_at, scanner_version) VALUES (:t, :s, :a, 'service', "
+                "'10.0.0.1', 22, '{\"banner\": \"SSH-2.0-A\"}', now(), 't') RETURNING id"
+            ),
+            {"t": p.a.id, "s": d.scan, "a": d.asset},
+        ).scalar_one()
+        c.execute(
+            text(
+                "INSERT INTO app.service (tenant_id, asset_id, address, port, state, name, "
+                "first_seen_at, last_seen_at, last_scan_id, last_evidence_id) VALUES "
+                "(:t, :a, '10.0.0.1', 22, 'open', 'ssh', now(), now(), :s, :e)"
+            ),
+            {"t": p.a.id, "a": d.asset, "s": d.scan, "e": evidence},
+        )
+    return d, str(evidence)
+
+
+def probe_list_services(client: TestClient, p: Pair) -> None:
+    d, _ = a_m5(client, p)
+    assert a_get(client, p, "/api/v1/services")["total"] == 1
+    r = client.get("/api/v1/services", headers=bearer(p.token_b))
+    assert r.status_code == 200 and r.json()["total"] == 0 and d.asset not in r.text
+    r = client.get(f"/api/v1/services?asset_id={d.asset}", headers=bearer(p.token_b))
+    assert r.json()["total"] == 0
+
+
+def probe_get_evidence(client: TestClient, p: Pair) -> None:
+    _, evidence = a_m5(client, p)
+    assert client.get(f"/api/v1/evidence/{evidence}", headers=bearer(p.token_b)).status_code == 404
+
+
+def probe_scan_evidence(client: TestClient, p: Pair) -> None:
+    d, _ = a_m5(client, p)
+    assert len(a_get(client, p, f"/api/v1/scans/{d.scan}/evidence")) == 1
+    r = client.get(f"/api/v1/scans/{d.scan}/evidence", headers=bearer(p.token_b))
+    assert r.status_code == 404
+
+
+M5_PROBES: dict[tuple[str, str], Callable[[TestClient, Pair], None]] = {
+    ("GET", "/api/v1/services"): probe_list_services,
+    ("GET", "/api/v1/evidence/{evidence_id}"): probe_get_evidence,
+    ("GET", "/api/v1/scans/{scan_id}/evidence"): probe_scan_evidence,
+}
+
+
 PROBES: dict[tuple[str, str], Callable[[TestClient, Pair], None]] = {
     ("GET", "/api/v1/auth/session"): probe_session,
     ("POST", "/api/v1/auth/logout"): probe_logout,
@@ -413,6 +466,7 @@ PROBES: dict[tuple[str, str], Callable[[TestClient, Pair], None]] = {
     ("GET", "/api/v1/audit-events"): probe_audit,
     **M3_PROBES,
     **M4_PROBES,
+    **M5_PROBES,
 }
 
 

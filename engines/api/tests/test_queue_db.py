@@ -12,8 +12,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from conftest import APP_URL, Org, needs_db
-from sqlalchemy import Connection, Engine, create_engine, text
+from conftest import Org, needs_db
+from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import DBAPIError, ProgrammingError
 
 pytestmark = needs_db
@@ -138,15 +138,6 @@ def sweep(engine: Engine) -> int:
     with engine.begin() as c:
         swept: int = c.execute(text("SELECT queue.sweep()")).scalar_one()
     return swept
-
-
-@pytest.fixture(scope="module")
-def wide_engine(migrated: None) -> Iterator[Engine]:
-    """A pool large enough for concurrent claimers (the shared app engine has one connection)."""
-    assert APP_URL
-    engine = create_engine(APP_URL, pool_size=8, max_overflow=0)
-    yield engine
-    engine.dispose()
 
 
 # ---- claiming ----

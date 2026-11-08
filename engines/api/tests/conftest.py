@@ -151,3 +151,12 @@ def api_operations(app: FastAPI) -> set[tuple[str, str]]:
     assert found == schema, found ^ schema
     assert found, "no /api/v1 routes found"
     return found
+
+
+@pytest.fixture(scope="session")
+def wide_engine(migrated: None) -> Iterator[Engine]:
+    """A pool large enough for concurrent claimers (the shared app engine has one connection)."""
+    assert APP_URL
+    engine = create_engine(APP_URL, pool_size=8, max_overflow=0)
+    yield engine
+    engine.dispose()

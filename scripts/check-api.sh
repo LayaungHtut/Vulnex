@@ -36,6 +36,7 @@ exec docker run --rm \
 	-e UV_PROJECT_ENVIRONMENT=/opt/venv \
 	-e UV_LINK_MODE=copy \
 	-e MYPY_CACHE_DIR=/tmp/mypy \
+	-e VULNEX_LOAD_TEST \
 	-e VULNEX_TEST_OWNER_URL="postgresql+psycopg://vulnex_owner:${VULNEX_OWNER_PASSWORD}@db:5432/vulnex_test" \
 	-e VULNEX_TEST_APP_URL="postgresql+psycopg://vulnex_app:${VULNEX_APP_PASSWORD}@db:5432/vulnex_test" \
 	ghcr.io/astral-sh/uv:0.13.3-python3.13-trixie-slim \
