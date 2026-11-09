@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -53,7 +53,7 @@ jobs:
       VULNEX_TEST_OWNER_URL: postgresql+psycopg://vulnex_owner:ci-throwaway-owner@127.0.0.1:5432/vulnex_test
       VULNEX_TEST_APP_URL: postgresql+psycopg://vulnex_app:ci-throwaway-app@127.0.0.1:5432/vulnex_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
         with:
           version: 0.13.3
@@ -73,7 +73,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       # Free for personal accounts; an organization-owned repo needs a GITLEAKS_LICENSE secret.
