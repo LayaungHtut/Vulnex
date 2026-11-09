@@ -77,6 +77,6 @@ jobs:
         with:
           fetch-depth: 0
       # Free for personal accounts; an organization-owned repo needs a GITLEAKS_LICENSE secret.
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
