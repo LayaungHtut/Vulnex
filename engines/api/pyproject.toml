@@ -2,6 +2,7 @@
 name = "vulnex"
 version = "0.1.0"
 description = "VULNEX control plane API"
+license = "Apache-2.0"
 requires-python = ">=3.13"
 dependencies = [
     "alembic>=1.14",

@@ -33,3 +33,7 @@ npm run test       # unit + e2e
 ## Scanning safety
 
 VULNEX scans only targets inside an explicitly authorized scope. Default behaviour is non-intrusive. Only test against systems you own or are authorized in writing to assess.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE).
