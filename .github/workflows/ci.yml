@@ -54,7 +54,7 @@ jobs:
       VULNEX_TEST_APP_URL: postgresql+psycopg://vulnex_app:ci-throwaway-app@127.0.0.1:5432/vulnex_test
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           version: 0.13.3
       - run: >-
