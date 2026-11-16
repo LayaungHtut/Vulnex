@@ -1,5 +1,5 @@
 # Build context: repository root (the uv workspace lockfile lives there).
-FROM python:3.13-slim
+FROM python:3.15-slim
 COPY --from=ghcr.io/astral-sh/uv:0.13.3 /uv /usr/local/bin/uv
 
 ENV UV_COMPILE_BYTECODE=1 \
